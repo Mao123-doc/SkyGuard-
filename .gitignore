@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Environment variables
+.env
+.env.*
+
+# Runtime data (regenerated on each run)
+data/conversations.json
+data/daily_stats.json
+data/feedback.json
+data/chunks_cache.json
+data/kb_docs/
+data/uploads/
+
+# Vector DB & Model cache (large, downloaded on first run)
+data/chroma_db/
+data/model_cache/
+
+# TTS cache
+data/tts-cache/
+
+# Evaluation evidence generated locally
+results/runtime_smoke.json
+data/test_results.json
+evaluation/verification/*.json
+!evaluation/verification/.gitkeep
+evaluation/verification/release-manifest.json
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Local linked worktrees
+.worktrees/
+
+# Test recordings & screenshots
+recordings/
+
+# Temporary & Archive files
+tmp/
+*.zip
+*.tar.gz
+*.rar
+
+# LaTeX compilation intermediates
+*.aux
+*.out
+*.toc
+*.synctex.gz
+
+# Python & Testing cache
+.pytest_cache/
+
+# Local results
+results/

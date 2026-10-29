@@ -1,0 +1,1086 @@
+/**
+ * RAG Service — Real chunking, vector embedding, similarity search, LLM generation.
+ * Uses Agnes/DeepSeek API for embeddings and LLM.
+ * Local file cache for embeddings to avoid re-embedding.
+ */
+import fs from 'fs';
+import path from 'path';
+import {
+  callLLMWithMetadata,
+  streamLLM,
+  buildTourGuideMessages,
+  isLLMAvailable,
+  type ModelIdentity,
+} from './llm-service';
+import { searchVectorsWithStatus, isVectorAvailable, waitForVectorService } from './vector-search-service';
+import { analyzeEmotion } from './emotion-service';
+import { searchStructured, getFieldIndex } from './structured-knowledge';
+import { DEFAULT_RAG_CONFIG, RAGExperimentConfig, resolveRAGConfig } from './rag-config';
+import { fuseCandidates, type RetrievalCandidate, type RetrievalChannel } from './retrieval/hybrid-retriever';
+import { resolveDataPath } from '../config/paths';
+
+// ============================================================
+// Types
+// ============================================================
+
+interface Chunk {
+  id: string;
+  text: string;
+  score?: number;
+  embedding?: number[];
+  metadata: {
+    source: string;
+    category: string;
+    keywords: string[];
+  };
+}
+
+export interface EvidenceDocument {
+  id: string;
+  text: string;
+  score: number;
+  source: string;
+  category: string;
+  keywords: string[];
+}
+
+interface RAGResult {
+  answer: string;
+  emotion: string;
+  relatedSpots: string[];
+  usedLLM: boolean;
+  retrievedChunks: number;
+  trace: RAGTrace;
+}
+
+export type RAGTraceStatus = 'executed' | 'skipped' | 'failed';
+
+export interface RAGTraceStage {
+  configured: boolean;
+  executed: boolean;
+  status: RAGTraceStatus;
+  reason?: string;
+  resultCount?: number;
+  fallbackUsed?: boolean;
+  modelIdentity?: ModelIdentity;
+}
+
+export interface RAGRetrievalTrace {
+  vector: RAGTraceStage;
+  structured: RAGTraceStage;
+  keyword: RAGTraceStage;
+  candidates?: Array<{
+    canonicalId: string;
+    dedupeKey: string;
+    channel: RetrievalChannel;
+    rank: number;
+    rawScore?: number;
+    rrfScore?: number;
+    channels?: RetrievalChannel[];
+  }>;
+  fusion?: {
+    method: 'rrf';
+    k: number;
+    inputCounts: Record<RetrievalChannel, number>;
+    candidateCount: number;
+  };
+}
+
+export interface RAGTrace {
+  originalQuery: string;
+  rewrittenQuery: string;
+  retrievalMode: 'vector' | 'structured' | 'keyword' | 'fusion' | 'none';
+  retrievedIds: string[];
+  retrievedScores: number[];
+  retrievedDocuments: EvidenceDocument[];
+  rerankEnabled: boolean;
+  rerankedIds: string[];
+  contextIds: string[];
+  historyMessageCount: number;
+  fullKnowledgeIncluded: boolean;
+  rewrite: RAGTraceStage;
+  retrieval: RAGRetrievalTrace;
+  rerank: RAGTraceStage;
+  generation: RAGTraceStage;
+}
+
+/** Expose retrieval evidence for evaluation without changing retrieval decisions. */
+export function toEvidenceDocuments(chunks: Array<Pick<Chunk, 'id' | 'text' | 'score' | 'metadata'>>): EvidenceDocument[] {
+  return chunks.map(chunk => ({
+    id: chunk.id,
+    text: chunk.text,
+    score: chunk.score || 0,
+    source: chunk.metadata.source,
+    category: chunk.metadata.category,
+    keywords: chunk.metadata.keywords,
+  }));
+}
+
+export function createTraceStage(
+  configured: boolean,
+  status: RAGTraceStatus,
+  reason?: string,
+  details?: Pick<RAGTraceStage, 'resultCount' | 'fallbackUsed' | 'modelIdentity'>,
+): RAGTraceStage {
+  const stage: RAGTraceStage = {
+    configured,
+    executed: status !== 'skipped',
+    status,
+  };
+  if (reason) stage.reason = reason;
+  if (details?.resultCount !== undefined) stage.resultCount = details.resultCount;
+  if (details?.fallbackUsed !== undefined) stage.fallbackUsed = details.fallbackUsed;
+  if (details?.modelIdentity !== undefined) stage.modelIdentity = details.modelIdentity;
+  return stage;
+}
+
+type RetrievalObservation = {
+  configured: boolean;
+  outcome?: 'unavailable' | 'failed' | 'executed';
+  resultCount?: number;
+  reason?: string;
+};
+
+export function createRetrievalTrace(observations: {
+  vector: RetrievalObservation;
+  structured: RetrievalObservation;
+  keyword: RetrievalObservation;
+}): RAGRetrievalTrace {
+  const stageFor = (observation: RetrievalObservation): RAGTraceStage => {
+    if (!observation.configured) return createTraceStage(false, 'skipped', 'disabled');
+    if (observation.outcome === 'unavailable') {
+      return createTraceStage(true, 'skipped', observation.reason || 'service_unavailable', { resultCount: 0 });
+    }
+    if (observation.outcome === 'failed') {
+      return createTraceStage(true, 'failed', observation.reason || 'execution_failed', { resultCount: 0 });
+    }
+    if (observation.resultCount !== undefined) {
+      return createTraceStage(true, 'executed', observation.resultCount === 0 ? 'zero_results' : undefined, {
+        resultCount: observation.resultCount,
+      });
+    }
+    return createTraceStage(true, 'skipped', 'not_reached', { resultCount: 0 });
+  };
+
+  const vector = stageFor(observations.vector);
+  const structured = stageFor(observations.structured);
+  const keyword = stageFor(observations.keyword);
+  if (vector.resultCount && vector.resultCount > 0) {
+    structured.status = 'skipped';
+    structured.executed = false;
+    structured.reason = 'previous_stage_returned_results';
+    keyword.status = 'skipped';
+    keyword.executed = false;
+    keyword.reason = 'previous_stage_returned_results';
+  } else if (structured.resultCount && structured.resultCount > 0) {
+    keyword.status = 'skipped';
+    keyword.executed = false;
+    keyword.reason = 'previous_stage_returned_results';
+  }
+  return { vector, structured, keyword };
+}
+
+export function createParallelRetrievalTrace(
+  observations: {
+    vector: RetrievalObservation;
+    structured: RetrievalObservation;
+    keyword: RetrievalObservation;
+  },
+  fusion?: RAGRetrievalTrace['fusion'],
+): RAGRetrievalTrace {
+  const stageFor = (observation: RetrievalObservation): RAGTraceStage => {
+    if (!observation.configured) return createTraceStage(false, 'skipped', 'disabled');
+    if (observation.outcome === 'unavailable' || observation.outcome === 'failed') {
+      return createTraceStage(true, 'failed', observation.reason || 'execution_failed', { resultCount: 0 });
+    }
+    if (observation.resultCount !== undefined) {
+      return createTraceStage(true, 'executed', observation.resultCount === 0 ? 'zero_results' : undefined, {
+        resultCount: observation.resultCount,
+      });
+    }
+    return createTraceStage(true, 'failed', 'not_observed', { resultCount: 0 });
+  };
+
+  return {
+    vector: stageFor(observations.vector),
+    structured: stageFor(observations.structured),
+    keyword: stageFor(observations.keyword),
+    ...(fusion ? { fusion } : {}),
+  };
+}
+
+// ============================================================
+// Chunking — Chinese text aware
+// ============================================================
+
+const CHINESE_SEPARATORS = ['\n\n', '\n', '。', '！', '？', '；', '，', '、'];
+
+function splitText(text: string, chunkSize: number = 500, overlap: number = 100): string[] {
+  const chunks: string[] = [];
+  let current = '';
+  const paragraphs = text.split(/\n\n+/);
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+    if (trimmed.length <= chunkSize) {
+      if ((current + trimmed).length > chunkSize && current) {
+        chunks.push(current.trim());
+        current = '';
+      }
+      current = current ? current + '\n\n' + trimmed : trimmed;
+      if (current.length >= chunkSize) { chunks.push(current.trim()); current = ''; }
+    } else {
+      if (current) { chunks.push(current.trim()); current = ''; }
+      const sentences = trimmed.split(/(?<=[。！？])/);
+      let subChunk = '';
+      for (const sent of sentences) {
+        if ((subChunk + sent).length > chunkSize && subChunk) {
+          chunks.push(subChunk.trim());
+          const lastSent = subChunk.split(/(?<=[。！？])/).pop() || '';
+          subChunk = lastSent + sent;
+        } else { subChunk += sent; }
+      }
+      if (subChunk.trim()) chunks.push(subChunk.trim());
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks.filter(c => c.length > 20);
+}
+
+// ============================================================
+// Keyword extraction for metadata
+// ============================================================
+
+const SPOT_NAMES = [
+  'A区看台', '中央广场', 'B区看台', '西侧看台', '北侧通道',
+  '南侧安全出口', '中央步道', '亲子集结点', '高区塔楼', '东侧休息区',
+  '入口广场', '主入口', '中轴浮雕墙', '中轴立柱', '应急物资仓库',
+  '东区集结点', '室外疏散区', '商业通道', '中心湖区', '应急指挥中心',
+  '东侧连廊', '东区', '中心水域', '中央楼梯',
+];
+
+function extractKeywords(text: string): string[] {
+  return SPOT_NAMES.filter(name => text.includes(name));
+}
+
+function detectCategory(text: string): string {
+  if (text.includes('门票') || text.includes('交通') || text.includes('餐饮') || text.includes('住宿')) return '实用信息';
+  if (text.includes('表演') || text.includes('演出') || text.includes('时间')) return '演艺信息';
+  if (text.includes('逃生通道') || text.includes('疏散') || text.includes('攻略')) return '疏散指南';
+  if (text.includes('唐代') || text.includes('北宋') || text.includes('历史') || text.includes('千年')) return '历史背景';
+  return '安全出口数据';
+}
+
+// ============================================================
+// Knowledge Base Loading & Indexing
+// ============================================================
+
+let knowledgeChunks: Chunk[] = [];
+let isIndexed = false;
+const CHUNKS_CACHE_FILE = resolveDataPath('chunks_cache.json');
+
+function loadKnowledgeTexts(): string[] {
+  const dataDir = resolveDataPath('raw');
+  const texts: string[] = [];
+
+  // Load all txt files
+  const entries = fs.readdirSync(dataDir);
+  for (const entry of entries) {
+    const filePath = path.join(dataDir, entry);
+    if (entry.endsWith('.txt')) {
+      texts.push(fs.readFileSync(filePath, 'utf-8'));
+    }
+  }
+  // If no txt files found, try loading from docx (async not possible, skip for sync init)
+  // The txt files are pre-extracted versions of the docx files
+  if (texts.length === 0) {
+    // Fallback to the original two files
+    texts.push(fs.readFileSync(path.join(dataDir, 'knowledge_guide.txt'), 'utf-8'));
+    texts.push(fs.readFileSync(path.join(dataDir, 'knowledge_dataset.txt'), 'utf-8'));
+  }
+  return texts;
+}
+
+function buildChunks(): Chunk[] {
+  const texts = loadKnowledgeTexts();
+  const allChunks: Chunk[] = [];
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i];
+    const source = `doc_${i}`;
+    const chunks = splitText(text, 500, 100).map((chunkText, j) => ({
+      id: `${source}_${j}`,
+      text: chunkText,
+      metadata: {
+        source,
+        category: detectCategory(chunkText),
+        keywords: extractKeywords(chunkText),
+      },
+    }));
+    allChunks.push(...chunks);
+  }
+  return allChunks;
+}
+
+function isCacheStale(): boolean {
+  try {
+    if (!fs.existsSync(CHUNKS_CACHE_FILE)) return true;
+    const cacheMtime = fs.statSync(CHUNKS_CACHE_FILE).mtimeMs;
+    const guidePath = resolveDataPath('raw', 'knowledge_guide.txt');
+    const datasetPath = resolveDataPath('raw', 'knowledge_dataset.txt');
+    const guideMtime = fs.statSync(guidePath).mtimeMs;
+    const datasetMtime = fs.statSync(datasetPath).mtimeMs;
+    return guideMtime > cacheMtime || datasetMtime > cacheMtime;
+  } catch {
+    return true;
+  }
+}
+
+function tryLoadCachedChunks(): boolean {
+  try {
+    if (!isCacheStale() && fs.existsSync(CHUNKS_CACHE_FILE)) {
+      const raw = fs.readFileSync(CHUNKS_CACHE_FILE, 'utf-8');
+      const cached = JSON.parse(raw);
+      if (Array.isArray(cached) && cached.length > 0) {
+        knowledgeChunks = cached;
+        isIndexed = true;
+        console.log(`[RAG] Loaded ${knowledgeChunks.length} cached chunks`);
+        return true;
+      }
+    }
+  } catch (e) {
+    console.log('[RAG] No valid cache found, will re-index');
+  }
+  return false;
+}
+
+function saveChunksCache(): void {
+  try {
+    const dir = path.dirname(CHUNKS_CACHE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CHUNKS_CACHE_FILE, JSON.stringify(knowledgeChunks, null, 2));
+    console.log(`[RAG] Saved ${knowledgeChunks.length} chunks to cache`);
+  } catch (e) {
+    console.error('[RAG] Failed to save chunks cache:', e);
+  }
+}
+
+/**
+ * Initialize the knowledge base — wait for vector service, fall back to keyword chunks.
+ */
+export async function initKnowledgeBase(): Promise<{ chunkCount: number; indexed: boolean }> {
+  console.log('[RAG] Initializing knowledge base...');
+
+  // Try vector service first (semantic search)
+  const vectorReady = await waitForVectorService(30000);
+  if (vectorReady) {
+    console.log('[RAG] Vector service ready — using semantic search');
+    isIndexed = true;
+    // Still build keyword chunks as fallback
+    if (!tryLoadCachedChunks()) {
+      knowledgeChunks = buildChunks();
+      saveChunksCache();
+    }
+    return { chunkCount: knowledgeChunks.length || 50, indexed: true };
+  }
+
+  console.log('[RAG] Vector service unavailable — using keyword matching');
+  // Load from cache or build
+  if (tryLoadCachedChunks()) {
+    isIndexed = true;
+    return { chunkCount: knowledgeChunks.length, indexed: true };
+  }
+
+  knowledgeChunks = buildChunks();
+  saveChunksCache();
+  isIndexed = true;
+  return { chunkCount: knowledgeChunks.length, indexed: true };
+}
+
+function keywordScore(chunk: Chunk, query: string): number {
+  let score = 0;
+  const qClean = query.replace(/[？?！!，,。.、\s]+/g, '');
+
+  // 1. Exact phrase match (highest weight)
+  if (chunk.text.includes(query)) score += 100;
+
+  // 2. Keyword match — whole spot name in query (e.g. query "A区看台" matches keyword "A区看台")
+  for (const kw of chunk.metadata.keywords) {
+    if (qClean.includes(kw)) score += kw.length * 3;
+    else if (kw.includes(qClean)) score += qClean.length * 2;
+  }
+
+  // 3. Longest common substring (medium weight) — e.g. "大佛" in "A区看台"
+  let maxCommon = 0;
+  for (let i = 0; i < qClean.length; i++) {
+    for (let j = i + 2; j <= qClean.length; j++) {
+      const sub = qClean.slice(i, j);
+      if (chunk.text.includes(sub) && sub.length > maxCommon) {
+        maxCommon = sub.length;
+      }
+    }
+  }
+  score += maxCommon * 5;
+
+  // 4. Individual character overlap (lowest weight, only count meaningful chars)
+  const meaningfulChars = qClean.replace(/[的地得了吗呢啊吧哦呀]/g, '').split('');
+  const uniqueChars = [...new Set(meaningfulChars)];
+  let charHits = 0;
+  for (const ch of uniqueChars) {
+    if (chunk.text.includes(ch)) charHits++;
+  }
+  // Only reward if significant overlap (more than half of chars match)
+  if (uniqueChars.length > 0 && charHits / uniqueChars.length > 0.5) {
+    score += charHits * 0.5;
+  } else if (charHits <= 1 && !score) {
+    // Don't return chunks that only match 1 character and have no other score
+    return 0;
+  }
+
+  return score;
+}
+
+async function searchChunksWithTrace(
+  query: string,
+  topK: number,
+  config: RAGExperimentConfig,
+): Promise<{ chunks: Chunk[]; mode: RAGTrace['retrievalMode']; trace: RAGRetrievalTrace }> {
+  const observations = {
+    vector: { configured: config.enableVectorRetrieval } as RetrievalObservation,
+    structured: { configured: config.enableStructuredRetrieval } as RetrievalObservation,
+    keyword: { configured: config.enableKeywordRetrieval } as RetrievalObservation,
+  };
+
+  const vectorPromise = (async (): Promise<RetrievalCandidate[]> => {
+    if (!config.enableVectorRetrieval) return [];
+    if (!isVectorAvailable()) {
+      observations.vector.outcome = 'unavailable';
+      observations.vector.reason = 'service_unavailable';
+      observations.vector.resultCount = 0;
+      return [];
+    }
+    try {
+      const outcome = await searchVectorsWithStatus(query, topK);
+      observations.vector.outcome = outcome.status;
+      observations.vector.reason = outcome.reason;
+      observations.vector.resultCount = outcome.results.length;
+      return outcome.results.map((result, index) => ({
+        canonicalId: result.id,
+        dedupeKey: `text:${result.text.replace(/\s+/g, '').slice(0, 1000)}`,
+        text: result.text,
+        source: result.metadata.source || '',
+        channel: 'vector' as const,
+        rank: index + 1,
+        rawScore: result.score,
+        metadata: {
+          category: result.metadata.category || '安全出口数据',
+          keywords: (result.metadata.keywords || '').split(',').filter(Boolean),
+        },
+      }));
+    } catch (error: any) {
+      observations.vector.outcome = 'failed';
+      observations.vector.reason = error?.message?.slice(0, 80) || 'execution_failed';
+      observations.vector.resultCount = 0;
+      return [];
+    }
+  })();
+
+  const structuredPromise = (async (): Promise<RetrievalCandidate[]> => {
+    if (!config.enableStructuredRetrieval) return [];
+    try {
+      const results = searchStructured(query, topK);
+      observations.structured.outcome = 'executed';
+      observations.structured.resultCount = results.length;
+      return results.map((result, index) => ({
+        canonicalId: `${result.spotId}_${result.fieldName}`,
+        dedupeKey: `structured:${result.spotId}_${result.fieldName}`,
+        text: `【${result.spotName}】${result.fieldLabel}：${result.text}`,
+        source: 'structured_dataset',
+        channel: 'structured' as const,
+        rank: index + 1,
+        rawScore: result.score,
+        metadata: { category: result.fieldLabel, keywords: [result.spotName] },
+      }));
+    } catch (error: any) {
+      observations.structured.outcome = 'failed';
+      observations.structured.reason = error?.message?.slice(0, 80) || 'execution_failed';
+      observations.structured.resultCount = 0;
+      return [];
+    }
+  })();
+
+  const keywordPromise = (async (): Promise<RetrievalCandidate[]> => {
+    if (!config.enableKeywordRetrieval) return [];
+    try {
+      if (knowledgeChunks.length === 0) knowledgeChunks = buildChunks();
+      const results = knowledgeChunks.map(chunk => ({ chunk, score: keywordScore(chunk, query) }))
+        .filter(result => result.score > 0)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, topK);
+      observations.keyword.outcome = 'executed';
+      observations.keyword.resultCount = results.length;
+      return results.map((result, index) => ({
+        canonicalId: result.chunk.id,
+        dedupeKey: `text:${result.chunk.text.replace(/\s+/g, '').slice(0, 1000)}`,
+        text: result.chunk.text,
+        source: result.chunk.metadata.source,
+        channel: 'keyword' as const,
+        rank: index + 1,
+        rawScore: result.score,
+        metadata: {
+          category: result.chunk.metadata.category,
+          keywords: result.chunk.metadata.keywords,
+        },
+      }));
+    } catch (error: any) {
+      observations.keyword.outcome = 'failed';
+      observations.keyword.reason = error?.message?.slice(0, 80) || 'execution_failed';
+      observations.keyword.resultCount = 0;
+      return [];
+    }
+  })();
+
+  const [vector, structured, keyword] = await Promise.all([vectorPromise, structuredPromise, keywordPromise]);
+  const fusion = fuseCandidates({ vector, structured, keyword });
+  const ranked = fusion.ranked.slice(0, topK);
+  const chunks: Chunk[] = ranked.map(candidate => ({
+    id: candidate.canonicalId,
+    text: candidate.text,
+    score: candidate.rrfScore,
+    metadata: {
+      source: candidate.source,
+      category: typeof candidate.metadata.category === 'string' ? candidate.metadata.category : '安全出口数据',
+      keywords: Array.isArray(candidate.metadata.keywords) ? candidate.metadata.keywords.map(String) : [],
+    },
+  }));
+  const enabledChannels = [
+    config.enableVectorRetrieval && 'vector',
+    config.enableStructuredRetrieval && 'structured',
+    config.enableKeywordRetrieval && 'keyword',
+  ].filter(Boolean) as RetrievalChannel[];
+  const mode: RAGTrace['retrievalMode'] = ranked.length === 0
+    ? 'none'
+    : enabledChannels.length > 1 ? 'fusion' : enabledChannels[0];
+  const trace = createParallelRetrievalTrace(observations, {
+    method: 'rrf',
+    k: fusion.rrfK,
+    inputCounts: fusion.channelCounts,
+    candidateCount: fusion.candidates.length,
+  });
+  trace.candidates = fusion.ranked.map(candidate => ({
+    canonicalId: candidate.canonicalId,
+    dedupeKey: candidate.dedupeKey,
+    channel: candidate.channel,
+    rank: candidate.rank,
+    rawScore: candidate.rawScore,
+    rrfScore: candidate.rrfScore,
+    channels: candidate.channels,
+  }));
+  return { chunks, mode, trace };
+}
+
+export async function searchChunks(
+  query: string,
+  topK: number = 5,
+  config: RAGExperimentConfig = DEFAULT_RAG_CONFIG,
+): Promise<Chunk[]> {
+  const result = await searchChunksWithTrace(query, topK, config);
+  return result.chunks;
+}
+
+// ============================================================
+// Context Builder
+// ============================================================
+
+function sourceAuthority(source: string): number {
+  if (source === 'knowledge_guide.txt' || source === 'doc_1') return 0;
+  if (source === 'knowledge_dataset.txt' || source === 'doc_0') return 1;
+  return 2;
+}
+
+export function orderContextBySourceAuthority(chunks: Chunk[]): Chunk[] {
+  return chunks
+    .map((chunk, index) => ({ chunk, index }))
+    .sort((left, right) => sourceAuthority(left.chunk.metadata.source) - sourceAuthority(right.chunk.metadata.source) || left.index - right.index)
+    .map(item => item.chunk);
+}
+
+/** Keep the context budget fixed while reserving one authoritative guide chunk when available. */
+export function selectContextChunks(chunks: Chunk[], contextTopK: number, query = ''): Chunk[] {
+  if (contextTopK <= 0 || chunks.length === 0) return [];
+
+  const selected = chunks.slice(0, contextTopK);
+  const queryText = query.replace(/[^\u4e00-\u9fffA-Za-z0-9]/g, '');
+  const queryBigrams = new Set(Array.from({ length: Math.max(0, queryText.length - 1) }, (_, index) => queryText.slice(index, index + 2)));
+  const lexicalEvidenceScore = (chunk: Chunk) => {
+    if (queryBigrams.size === 0) return 0;
+    return Array.from(queryBigrams).filter(bigram => chunk.text.includes(bigram)).length;
+  };
+  const authoritative = chunks
+    .map((chunk, index) => ({ chunk, index }))
+    .filter(item => sourceAuthority(item.chunk.metadata.source) === 0)
+    .sort((left, right) => lexicalEvidenceScore(right.chunk) - lexicalEvidenceScore(left.chunk) || left.index - right.index)[0]?.chunk;
+  const hasAuthoritative = selected.some(chunk => sourceAuthority(chunk.metadata.source) === 0);
+
+  if (authoritative && !hasAuthoritative && !selected.some(chunk => chunk.id === authoritative.id)) {
+    if (selected.length >= contextTopK) selected[selected.length - 1] = authoritative;
+    else selected.push(authoritative);
+  }
+
+  return orderContextBySourceAuthority(selected);
+}
+
+export function buildRetrievedContext(chunks: Chunk[]): string {
+  if (chunks.length === 0) return '未找到直接相关的内容。';
+  return chunks.map((c, i) =>
+    `[片段${i + 1}] (id=${c.id}; source=${c.metadata.source}; category=${c.metadata.category})\n${c.text}`
+  ).join('\n\n');
+}
+
+// ============================================================
+// Conversation History
+// ============================================================
+
+const sessionHistory: Map<string, Array<{ role: 'user' | 'assistant'; content: string }>> = new Map();
+const sessionTimestamps = new Map<string, number>();
+const MAX_HISTORY = 12; // 6 turns
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_SESSIONS = 1000;
+
+function cleanupStaleSessions(): void {
+  const cutoff = Date.now() - SESSION_TTL_MS;
+  for (const [id, ts] of sessionTimestamps) {
+    if (ts < cutoff) {
+      sessionHistory.delete(id);
+      sessionTimestamps.delete(id);
+    }
+  }
+  // Hard cap: evict oldest if still over limit
+  if (sessionHistory.size > MAX_SESSIONS) {
+    const sorted = [...sessionTimestamps.entries()]
+      .sort((a, b) => a[1] - b[1]);
+    const toDelete = sorted.slice(0, sorted.length - MAX_SESSIONS);
+    for (const [id] of toDelete) {
+      sessionHistory.delete(id);
+      sessionTimestamps.delete(id);
+    }
+  }
+}
+
+export function getSessionHistory(sessionId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
+  cleanupStaleSessions();
+  sessionTimestamps.set(sessionId, Date.now()); // refresh TTL
+  return sessionHistory.get(sessionId) || [];
+}
+
+export function addToHistory(sessionId: string, role: 'user' | 'assistant', content: string): void {
+  cleanupStaleSessions();
+  const history = sessionHistory.get(sessionId) || [];
+  history.push({ role, content });
+  if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
+  sessionHistory.set(sessionId, history);
+  sessionTimestamps.set(sessionId, Date.now());
+}
+
+// ============================================================
+// Emotion Detection — uses LLM with keyword fallback
+// ============================================================
+
+async function detectEmotion(query: string, answer: string): Promise<string> {
+  return analyzeEmotion(query);
+}
+
+// ============================================================
+// Related Spots Extraction
+// ============================================================
+
+function extractRelatedSpots(text: string): string[] {
+  return SPOT_NAMES.filter(s => text.includes(s));
+}
+
+// ============================================================
+// Query Rewriting — colloquial → search-friendly
+// ============================================================
+
+/**
+ * Rewrite a colloquial user query into a search-optimized form.
+ * Uses LLM when available; returns original query on failure.
+ */
+async function rewriteQueryWithTrace(
+  query: string,
+  configured: boolean,
+): Promise<{ query: string; trace: RAGTraceStage }> {
+  if (!configured) return { query, trace: createTraceStage(false, 'skipped', 'disabled') };
+  if (!isLLMAvailable()) {
+    return { query, trace: createTraceStage(true, 'skipped', 'llm_unavailable') };
+  }
+  if (query.length < 3) {
+    return { query, trace: createTraceStage(true, 'skipped', 'query_too_short') };
+  }
+
+  // Quick check: already search-friendly (short, keyword-like)?
+  if (query.length <= 8 && !/[？?吗呢吧啊呀]/.test(query)) {
+    return { query, trace: createTraceStage(true, 'skipped', 'already_search_friendly') };
+  }
+
+  try {
+    const result = await callLLMWithMetadata([
+      {
+        role: 'system',
+        content: `你是应急指挥查询改写助手。将疏散人群的口语化问题改写为精准的搜索关键词。
+规则：
+- 提取核心安全出口名、属性词（容量、位置、距离、预案等）
+- 去掉语气词、敬语、问候语
+- 保留原意，不做扩展
+- 只输出改写后的关键词（不超过20个字），不要解释
+
+示例：
+输入："最近的出口在哪里"  → 输出："最近安全出口 位置"
+输入："西侧通道现在堵吗"  → 输出："西侧逃生通道 拥堵"
+输入："集结点在什么位置"  → 输出："集结点 位置"`,
+      },
+      { role: 'user', content: query },
+    ], { temperature: 0.1, max_tokens: 30 });
+
+    const rewritten = result.content?.trim();
+    if (!rewritten) {
+      return {
+        query,
+        trace: createTraceStage(true, 'failed', 'llm_call_failed', {
+          modelIdentity: result.modelIdentity,
+        }),
+      };
+    }
+    if (rewritten && rewritten.length >= 2 && rewritten !== query) {
+      console.log(`[RAG] Query rewritten: "${query}" → "${rewritten}"`);
+      return {
+        query: rewritten,
+        trace: createTraceStage(true, 'executed', undefined, {
+          modelIdentity: result.modelIdentity,
+        }),
+      };
+    }
+    return {
+      query,
+      trace: createTraceStage(true, 'executed', undefined, {
+        modelIdentity: result.modelIdentity,
+      }),
+    };
+  } catch {
+    return { query, trace: createTraceStage(true, 'failed', 'llm_call_failed') };
+  }
+}
+
+async function rewriteQuery(query: string): Promise<string> {
+  return (await rewriteQueryWithTrace(query, true)).query;
+}
+
+// ============================================================
+// Reranker — LLM-based relevance scoring
+// ============================================================
+
+export function parseRerankOrder(
+  content: string,
+  candidateCount: number,
+): { indices: number[]; validCount: number } {
+  const seen = new Set<number>();
+  const validIndices: number[] = [];
+
+  for (const token of content.split(/[,，\s]+/)) {
+    const index = Number.parseInt(token.trim(), 10);
+    if (!Number.isInteger(index) || index < 0 || index >= candidateCount || seen.has(index)) continue;
+    seen.add(index);
+    validIndices.push(index);
+  }
+
+  const remainingIndices = Array.from({ length: candidateCount }, (_, index) => index)
+    .filter(index => !seen.has(index));
+
+  return {
+    indices: [...validIndices, ...remainingIndices],
+    validCount: validIndices.length,
+  };
+}
+
+/**
+ * Use LLM to re-rank search results by relevance to the query.
+ * Graded, not just pointwise — asks the model to pick the best matches.
+ */
+async function rerankChunksWithTrace(
+  query: string,
+  chunks: Chunk[],
+  configured: boolean,
+): Promise<{ chunks: Chunk[]; trace: RAGTraceStage }> {
+  if (!configured) {
+    return { chunks, trace: createTraceStage(false, 'skipped', 'disabled') };
+  }
+  if (chunks.length <= 2) {
+    return { chunks, trace: createTraceStage(true, 'skipped', 'insufficient_candidates', { resultCount: chunks.length }) };
+  }
+  if (!isLLMAvailable()) {
+    return { chunks, trace: createTraceStage(true, 'skipped', 'llm_unavailable', { resultCount: chunks.length }) };
+  }
+
+  try {
+    const snippets = chunks.map((c, i) =>
+      `[${i}] (${c.metadata.category}) ${c.text.slice(0, 250)}`
+    ).join('\n---\n');
+
+    const result = await callLLMWithMetadata([
+      {
+        role: 'system',
+        content: `你是搜索相关性评分专家。给定疏散人群问题和检索到的文档片段，选出最相关的片段。
+
+要求：
+1. 评估每个片段与问题的相关性（考虑安全出口名称匹配、属性匹配、语义相关）
+2. 返回最相关片段的序号，按相关性从高到低排列
+3. 只返回序号，用逗号分隔，如：2,0,3,1,4
+4. 只返回数字和逗号，不要其他内容`,
+      },
+      {
+        role: 'user',
+        content: `疏散人群问题：${query}
+
+候选片段：
+${snippets}
+
+请选出最相关的片段序号（从高到低排列）：`,
+      },
+    ], { temperature: 0.05, max_tokens: 30 });
+
+    // Parse ranking
+    const parsedOrder = parseRerankOrder(result.content || '', chunks.length);
+
+    if (parsedOrder.validCount >= 1) {
+      const reranked = parsedOrder.indices.map(i => chunks[i]);
+      const rerankReason = parsedOrder.validCount < chunks.length ? 'partial_response' : undefined;
+      // Log the improvement for debugging
+      const oldTop = chunks[0]?.text.slice(0, 40);
+      const newTop = reranked[0]?.text.slice(0, 40);
+      if (oldTop !== newTop) {
+        console.log(`[RAG] Reranked: top result changed from "${oldTop}..." → "${newTop}..."`);
+      }
+      return {
+        chunks: reranked,
+        trace: createTraceStage(true, 'executed', rerankReason, {
+          resultCount: reranked.length,
+          modelIdentity: result.modelIdentity,
+        }),
+      };
+    }
+    return {
+      chunks,
+      trace: createTraceStage(true, 'failed', 'invalid_response', {
+        resultCount: chunks.length,
+        modelIdentity: result.modelIdentity,
+      }),
+    };
+  } catch (e: any) {
+    console.warn(`[RAG] Rerank failed: ${e.message?.slice(0, 80)}`);
+    return { chunks, trace: createTraceStage(true, 'failed', 'llm_call_failed', { resultCount: chunks.length }) };
+  }
+}
+
+async function rerankChunks(query: string, chunks: Chunk[]): Promise<Chunk[]> {
+  return (await rerankChunksWithTrace(query, chunks, true)).chunks;
+}
+
+// ============================================================
+// Main Query Functions
+// ============================================================
+
+/**
+ * RAG query — vector search + LLM generation.
+ */
+export async function queryRAG(
+  query: string,
+  sessionId: string,
+  configOverrides?: Partial<RAGExperimentConfig>,
+): Promise<RAGResult> {
+  const config = resolveRAGConfig(configOverrides);
+  // 0. Rewrite query for better search precision
+  const rewriteResult = await rewriteQueryWithTrace(query, config.enableQueryRewrite);
+  const searchQuery = rewriteResult.query;
+
+  // 1. Search for relevant chunks
+  const searchResult = await searchChunksWithTrace(searchQuery, config.retrievalTopK, config);
+  let chunks = searchResult.chunks;
+
+  // 2. Rerank for relevance
+  const rerankResult = await rerankChunksWithTrace(query, chunks, config.enableRerank); // use original query for relevance judgment
+  chunks = rerankResult.chunks;
+  const contextChunks = selectContextChunks(chunks, config.contextTopK, searchQuery);
+  const rerankedContext = buildRetrievedContext(contextChunks);
+  const traceBase = {
+    originalQuery: query,
+    rewrittenQuery: searchQuery,
+    retrievalMode: searchResult.mode,
+    retrievedIds: searchResult.chunks.map(chunk => chunk.id),
+    retrievedScores: searchResult.chunks.map(chunk => chunk.score || 0),
+    retrievedDocuments: toEvidenceDocuments(searchResult.chunks),
+    rerankEnabled: config.enableRerank,
+    rerankedIds: chunks.map(chunk => chunk.id),
+    contextIds: contextChunks.map(chunk => chunk.id),
+    historyMessageCount: 0,
+    fullKnowledgeIncluded: config.includeFullKnowledge,
+    rewrite: rewriteResult.trace,
+    retrieval: searchResult.trace,
+    rerank: rerankResult.trace,
+    generation: createTraceStage(true, 'skipped', 'not_started', { fallbackUsed: false }),
+  } satisfies RAGTrace;
+
+  // 3. If LLM available, use it for generation
+  const llmAvailable = isLLMAvailable();
+  if (llmAvailable) {
+    const history = config.enableHistory ? getSessionHistory(sessionId) : [];
+    traceBase.historyMessageCount = history.length;
+    const messages = buildTourGuideMessages(query, rerankedContext, history.map(h => ({
+      role: h.role as 'user' | 'assistant',
+      content: h.content,
+    })), { includeFullKnowledge: config.includeFullKnowledge });
+
+    const generation = await callLLMWithMetadata(messages, { temperature: 0.3, max_tokens: 280 });
+    const answer = generation.content;
+
+    if (answer) {
+      traceBase.generation = createTraceStage(true, 'executed', undefined, {
+        fallbackUsed: false,
+        modelIdentity: generation.modelIdentity,
+      });
+      addToHistory(sessionId, 'user', query);
+      addToHistory(sessionId, 'assistant', answer);
+
+      return {
+        answer,
+        emotion: await detectEmotion(query, answer),
+        relatedSpots: extractRelatedSpots(answer),
+        usedLLM: true,
+        retrievedChunks: chunks.length,
+        trace: traceBase,
+      };
+    }
+    traceBase.generation = createTraceStage(true, 'failed', 'llm_call_failed', {
+      fallbackUsed: true,
+      modelIdentity: generation.modelIdentity,
+    });
+  } else {
+    traceBase.generation = createTraceStage(true, 'skipped', 'llm_unavailable', { fallbackUsed: true });
+  }
+
+  // 4. Fallback: use retrieved chunks directly
+  let fallbackAnswer: string;
+  if (chunks.length > 0) {
+    fallbackAnswer = chunks.slice(0, 3).map(c => c.text).join('\n\n');
+    fallbackAnswer = `关于您的问题"${query}"，以下是相关信息：\n\n${fallbackAnswer}\n\n💡 提示：接入AI大模型后可以获得更精准的个性化回答。`;
+  } else {
+    fallbackAnswer = `感谢您的提问！关于"${query}"，我目前的知识库中暂未收录详细信息。\n\n建议您：\n• 换一种方式描述问题\n• 咨询安保指挥疏散人群中心工作人员\n• 拨打安保指挥服务热线`;
+  }
+
+  addToHistory(sessionId, 'user', query);
+  addToHistory(sessionId, 'assistant', fallbackAnswer);
+
+  return {
+    answer: fallbackAnswer,
+    emotion: await detectEmotion(query, fallbackAnswer),
+    relatedSpots: extractRelatedSpots(fallbackAnswer),
+    usedLLM: false,
+    retrievedChunks: chunks.length,
+    trace: traceBase,
+  };
+}
+
+/**
+ * Streaming RAG query for SSE.
+ */
+export async function* streamRAGQuery(
+  query: string,
+  sessionId: string,
+  configOverrides?: Partial<RAGExperimentConfig>,
+): AsyncGenerator<string> {
+  const config = resolveRAGConfig(configOverrides);
+  // 0. Rewrite query
+  const searchQuery = config.enableQueryRewrite ? await rewriteQuery(query) : query;
+
+  // 1. Search — fetch more for reranking
+  const searchResult = await searchChunksWithTrace(searchQuery, config.retrievalTopK, config);
+  let chunks = searchResult.chunks;
+
+  // 2. Rerank
+  if (config.enableRerank) chunks = await rerankChunks(query, chunks);
+  const rerankedContext = buildRetrievedContext(selectContextChunks(chunks, config.contextTopK, searchQuery));
+
+  if (!isLLMAvailable()) {
+    const result = await queryRAG(query, sessionId, config);
+    addToHistory(sessionId, 'user', query);
+    addToHistory(sessionId, 'assistant', result.answer);
+    yield result.answer;
+    return;
+  }
+
+  // 3. Stream LLM response with adequate token budget
+  const history = config.enableHistory ? getSessionHistory(sessionId) : [];
+  const messages = buildTourGuideMessages(query, rerankedContext, history.map(h => ({
+    role: h.role as 'user' | 'assistant',
+    content: h.content,
+  })), { includeFullKnowledge: config.includeFullKnowledge });
+
+  let fullAnswer = '';
+  let hasContent = false;
+  for await (const chunk of streamLLM(messages, { temperature: 0.3, max_tokens: 500 })) {
+    fullAnswer += chunk;
+    hasContent = true;
+    yield chunk;
+  }
+
+  // 3. If LLM streaming produced nothing, fall back to non-streaming
+  if (!hasContent) {
+    console.warn('[RAG] LLM stream returned empty, falling back to non-streaming');
+    const result = await queryRAG(query, sessionId, config);
+    if (result.answer && result.answer !== fullAnswer) {
+      fullAnswer = result.answer;
+      yield result.answer;
+    }
+  }
+
+  if (fullAnswer) {
+    addToHistory(sessionId, 'user', query);
+    addToHistory(sessionId, 'assistant', fullAnswer);
+  }
+}
+
+/**
+ * Re-index the knowledge base (for admin use).
+ */
+export async function reindexKnowledgeBase(): Promise<{ chunkCount: number; indexed: boolean }> {
+  isIndexed = false;
+  knowledgeChunks = [];
+  // Clear cache
+  try { fs.unlinkSync(CHUNKS_CACHE_FILE); } catch {}
+  // Trigger vector rebuild and wait for it
+  try {
+    const { rebuildVectorIndex } = await import('./vector-search-service');
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        rebuildVectorIndex(),
+        new Promise(resolve => { timeout = setTimeout(resolve, 30000); }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  } catch (e: any) {
+    console.warn('[RAG] Vector rebuild failed:', e?.message);
+  }
+  return initKnowledgeBase();
+}
+
+/**
+ * Get knowledge base stats.
+ */
+export function getKnowledgeStats(): { chunkCount: number; isIndexed: boolean; totalTextLength: number; vectorAvailable: boolean } {
+  return {
+    chunkCount: knowledgeChunks.length || 50,
+    isIndexed,
+    totalTextLength: knowledgeChunks.reduce((sum, c) => sum + c.text.length, 0),
+    vectorAvailable: isVectorAvailable(),
+  };
+}

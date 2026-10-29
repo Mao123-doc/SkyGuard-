@@ -1,0 +1,576 @@
+import { Router, Request, Response } from 'express';
+import multer from 'multer';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import {
+  getConversationStats, getHotQuestions, getEmotionDistribution,
+  getHourlyDistribution, getSatisfactionTrend, getFeedbackStats,
+  getConversations, getFilteredConversations, getTopUnsatisfied,
+  getVisitorLocationStats, getCategoryDistribution, updateConversationFeedback,
+} from '../../db/store';
+import { reindexKnowledgeBase, getKnowledgeStats, initKnowledgeBase } from '../../services/rag-service';
+import { isLLMAvailable, getActiveModelName, callLLM, callMultimodalLLM } from '../../services/llm-service';
+import { resolveDataPath } from '../../config/paths';
+
+const adminRouter = Router();
+
+function csvCell(value: unknown): string {
+  let text = String(value ?? '');
+  if (/^[\t\r\n =+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+// ============================================================
+// Upload & Doc Processing
+// ============================================================
+function getUploadDir(): string {
+  const dir = resolveDataPath('uploads');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+
+function getKbDocsDir(): string {
+  const dir = resolveDataPath('kb_docs');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, getUploadDir()),
+  filename: (_req, file, cb) => {
+    const id = uuidv4();
+    const ext = path.extname(file.originalname);
+    cb(null, `${id}${ext}`);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const extension = path.extname(file.originalname).toLowerCase();
+    if (['.txt', '.docx', '.xlsx', '.xls'].includes(extension)) {
+      cb(null, true);
+      return;
+    }
+    const error = new Error('不支持的文件类型') as Error & { status?: number };
+    error.status = 400;
+    cb(error);
+  },
+});
+
+/** Parse uploaded docx and extract text for knowledge base */
+async function parseDocument(filePath: string, ext: string): Promise<string> {
+  // Try mammoth for docx
+  if (ext === '.docx') {
+    try {
+      const mammoth = await import('mammoth');
+      const result = await mammoth.extractRawText({ path: filePath });
+      return result.value;
+    } catch (e) {
+      console.error('Mammoth parse error:', e);
+    }
+  }
+  // Try xlsx for Excel files
+  if (ext === '.xlsx' || ext === '.xls') {
+    try {
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.readFile(filePath);
+      let text = '';
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        text += XLSX.utils.sheet_to_csv(sheet) + '\n';
+      }
+      return text;
+    } catch (e) {
+      console.error('XLSX parse error:', e);
+    }
+  }
+  // Plain text
+  if (ext === '.txt') {
+    return fs.readFileSync(filePath, 'utf-8');
+  }
+  return '';
+}
+
+// ============ Dashboard ============
+
+adminRouter.get('/dashboard/summary', (_req: Request, res: Response) => {
+  const stats = getConversationStats();
+  const feedback = getFeedbackStats();
+  const hotQuestions = getHotQuestions(7);
+  const hourlyDist = getHourlyDistribution(7);
+  const trend = getSatisfactionTrend(7);
+  const emotionDist = getEmotionDistribution(7);
+
+  const sentimentDist = feedback.total > 0
+    ? feedback.sentiment_distribution
+    : {
+        positive: (emotionDist.happy || 0) + (emotionDist.greet || 0),
+        neutral: (emotionDist.explain || 0) + (emotionDist.think || 0) + (emotionDist.farewell || 0),
+        negative: (emotionDist.sorry || 0) + (emotionDist.angry || 0),
+      };
+
+  res.json({
+    today_queries: stats.today,
+    week_queries: stats.week,
+    monthly_queries: stats.month,
+    total_queries: stats.total,
+    avg_satisfaction: Math.round(feedback.avg_rating * 20) || 0,
+    total_spots: 22, // LS spots (16) + NH spots (6)
+    total_knowledge_chunks: getKnowledgeStats().chunkCount,
+    knowledge_indexed: getKnowledgeStats().isIndexed,
+    model: getActiveModelName(),
+    top_hot_questions: hotQuestions.slice(0, 10),
+    satisfaction_trend: trend,
+    hourly_distribution: hourlyDist,
+    sentiment_distribution: sentimentDist,
+    feedback_total: feedback.total,
+  });
+});
+
+// ============ Sentiment Reports ============
+
+adminRouter.get('/reports/sentiment', async (req: Request, res: Response) => {
+  const periodStr = (req.query.period as string) || 'week';
+  const days = periodStr === 'day' ? 1 : periodStr === 'month' ? 30 : 7;
+  const stats = getConversationStats();
+  const emotionDist = getEmotionDistribution(days);
+  const hotQuestions = getHotQuestions(days);
+  const feedback = getFeedbackStats();
+
+  const sentiment = feedback.sentiment_distribution;
+  const hasRating = feedback.total > 0;
+  const positive = hasRating ? sentiment.positive : (emotionDist.happy || 0) + (emotionDist.greet || 0);
+  const neutral = hasRating ? sentiment.neutral : (emotionDist.explain || 0) + (emotionDist.think || 0) + (emotionDist.farewell || 0);
+  const negative = hasRating ? sentiment.negative : (emotionDist.sorry || 0) + (emotionDist.angry || 0);
+  const total = positive + neutral + negative || 1;
+
+  // Get top mentioned spots from recent conversations
+  const recentConvs = getConversations(200);
+  const spotMentions: Record<string, number> = {};
+  const spotNames = ['A区看台','中央广场','B区看台','西侧看台','北侧通道','南侧安全出口','中央步道','亲子集结点','高区塔楼','东侧休息区','入口广场','主入口','中轴浮雕墙','中轴立柱','东区集结点','室外疏散区','商业通道','中心湖区','应急指挥中心'];
+  for (const conv of recentConvs) {
+    for (const spot of spotNames) {
+      if ((conv.query + conv.answer).includes(spot)) {
+        spotMentions[spot] = (spotMentions[spot] || 0) + 1;
+      }
+    }
+  }
+  const topSpots = Object.entries(spotMentions)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, count]) => ({ name, mention_count: count }));
+
+  // Get sample negative-feedback conversations for deeper analysis
+  const sampleNegatives = recentConvs
+    .filter(c => c.emotion === 'sorry' || c.emotion === 'angry' || (c as any).feedback === 'unhelpful')
+    .slice(0, 5)
+    .map(c => ({ query: c.query?.slice(0, 80), answer: c.answer?.slice(0, 80) }));
+
+  const count = days === 7 ? stats.week : days === 1 ? stats.today : stats.month;
+  const periodLabel = days === 1 ? '今日' : days === 7 ? '本周' : '本月';
+  const posPct = Math.round((positive / total) * 100);
+  const neuPct = Math.round((neutral / total) * 100);
+  const negPct = Math.round((negative / total) * 100);
+
+  // ── AI Summary (fast, < 5s) ──────────────────────────────────
+  let summary = '';
+  if (isLLMAvailable()) {
+    const topQs = hotQuestions.slice(0, 5).map((q: any) => `${q.question}(${q.count}次)`).join('、');
+    const topSps = topSpots.slice(0, 5).map((s: any) => `${s.name}(${s.mention_count}次)`).join('、');
+
+    try {
+      summary = await callLLM([
+        {
+          role: 'system',
+          content: `你是应急指挥数据分析师。根据数据写一份简洁的分析报告（200字以内），包含：1.总体评价 2.关键发现 3.一条改进建议。用Markdown格式。`,
+        },
+        {
+          role: 'user',
+          content: `${periodLabel}数据：咨询${count}次，正面${posPct}% 中性${neuPct}% 负面${negPct}%。热门问题：${topQs}。热门安全出口：${topSps}。`,
+        },
+      ], { temperature: 0.3, max_tokens: 200 });
+    } catch {
+      summary = '';
+    }
+  }
+
+  if (!summary) {
+    summary = `### 📊 ${periodLabel}概况\n\n咨询 **${count}** 次，正面 **${posPct}%** / 中性 **${neuPct}%** / 负面 **${negPct}%**。\n\n### 🔥 热门话题\n${hotQuestions.slice(0, 5).map((q: any, i: number) => `${i + 1}. ${q.question}（${q.count}次）`).join('\n')}\n\n### 🏛️ 热门安全出口\n${topSpots.slice(0, 5).map((s: any, i: number) => `${i + 1}. ${s.name}（${s.mention_count}次）`).join('\n')}`;
+  }
+
+  res.json({
+    period_type: periodStr,
+    period_start: new Date(Date.now() - days * 86400000).toISOString().split('T')[0],
+    period_end: new Date().toISOString().split('T')[0],
+    total_queries: count,
+    avg_sentiment: posPct,
+    sentiment_distribution: {
+      positive: posPct,
+      neutral: neuPct,
+      negative: negPct,
+    },
+    hot_questions: hotQuestions,
+    top_spots: topSpots.length > 0 ? topSpots : [
+      { name: 'A区看台', mention_count: 0 },
+      { name: 'B区看台', mention_count: 0 },
+      { name: '中央广场', mention_count: 0 },
+    ],
+    summary,
+  });
+});
+
+// ============ LLM Sentiment Analysis ============
+
+adminRouter.post('/reports/analyze-sentiment', async (req: Request, res: Response) => {
+  if (!isLLMAvailable()) {
+    return res.status(503).json({ error: 'LLM 不可用' });
+  }
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: '请提供待分析文本' });
+
+    const result = await callLLM([
+      { role: 'system', content: '你是一个情感分析专家。分析以下疏散人群与应急指挥专家的对话，判断情感倾向。只返回JSON格式：{"sentiment":"positive/neutral/negative","confidence":0.0-1.0,"topics":["话题1","话题2"]}。不要返回其他内容。' },
+      { role: 'user', content: text },
+    ], { temperature: 0.1, max_tokens: 150 });
+
+    try {
+      const parsed = JSON.parse(result);
+      res.json(parsed);
+    } catch {
+      res.json({ sentiment: 'neutral', confidence: 0.5, topics: [] });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: '分析失败', detail: e.message });
+  }
+});
+
+// ============ Knowledge Base Management ============
+
+adminRouter.post('/knowledge/documents', upload.single('file'), async (req: Request, res: Response) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: '请上传文件' });
+
+  const ext = path.extname(file.originalname).toLowerCase();
+  let text = '';
+  let status = 'uploaded';
+  let docId = '';
+
+  // Try to parse and index immediately
+  try {
+    text = await parseDocument(file.path, ext);
+    if (text && text.length > 50) {
+      // Save parsed text to kb_docs for re-indexing
+      docId = uuidv4();
+      const docPath = path.join(getKbDocsDir(), `${docId}.txt`);
+      fs.writeFileSync(docPath, text);
+      status = 'indexed';
+    }
+  } catch (e) {
+    console.error('Document parsing error:', e);
+    status = 'parse_failed';
+  }
+
+  res.json({
+    id: file.filename,
+    title: file.originalname,
+    filename: file.filename,
+    size: file.size,
+    docId,
+    status,
+    text_length: text.length,
+    message: status === 'indexed'
+      ? '文档已解析并加入知识库。点击"重建索引"使其生效。'
+      : status === 'parse_failed'
+        ? '文档解析失败，请确认文件格式正确。'
+        : '文件已上传，但内容较短未自动索引。',
+  });
+});
+
+adminRouter.get('/knowledge/documents', (_req: Request, res: Response) => {
+  const docs: Array<{ id: string; name: string; size: number; date: string; status: string }> = [];
+  try {
+    // 1. Source knowledge files (data/raw/)
+    const rawDir = resolveDataPath('raw');
+    if (fs.existsSync(rawDir)) {
+      const rawEntries = fs.readdirSync(rawDir);
+      for (const entry of rawEntries) {
+        if (entry.startsWith('.')) continue;
+        if (!entry.endsWith('.txt') && !entry.endsWith('.docx') && !entry.endsWith('.xlsx')) continue;
+        const stat = fs.statSync(path.join(rawDir, entry));
+        docs.push({
+          id: entry,
+          name: entry,
+          size: stat.size,
+          date: stat.mtime.toISOString().split('T')[0],
+          status: 'indexed',
+        });
+      }
+    }
+    // 2. Uploaded files
+    const uploadDir = getUploadDir();
+    if (fs.existsSync(uploadDir)) {
+      const entries = fs.readdirSync(uploadDir);
+      for (const entry of entries) {
+        if (entry.startsWith('.')) continue;
+        const stat = fs.statSync(path.join(uploadDir, entry));
+        docs.push({
+          id: entry,
+          name: entry,
+          size: stat.size,
+          date: stat.mtime.toISOString().split('T')[0],
+          status: 'uploaded',
+        });
+      }
+    }
+    // 3. Parsed KB docs
+    const kbDocsDir = getKbDocsDir();
+    if (fs.existsSync(kbDocsDir)) {
+      const kbEntries = fs.readdirSync(kbDocsDir);
+      for (const entry of kbEntries) {
+        if (entry.startsWith('.')) continue;
+        const stat = fs.statSync(path.join(kbDocsDir, entry));
+        if (!docs.find(d => d.name === entry)) {
+          docs.push({
+            id: entry,
+            name: entry,
+            size: stat.size,
+            date: stat.mtime.toISOString().split('T')[0],
+            status: 'indexed',
+          });
+        }
+      }
+    }
+  } catch {}
+  res.json(docs);
+});
+
+adminRouter.delete('/knowledge/documents/:id', (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  if (!id || id === '.' || id === '..' || id !== path.basename(id) || path.isAbsolute(id)) {
+    res.status(404).json({ error: '文档不存在' });
+    return;
+  }
+  let deleted = false;
+  try {
+    const p1 = path.join(getUploadDir(), id);
+    const p2 = path.join(getKbDocsDir(), id);
+    if (fs.existsSync(p1)) { fs.unlinkSync(p1); deleted = true; }
+    if (fs.existsSync(p2)) { fs.unlinkSync(p2); deleted = true; }
+  } catch {}
+  if (deleted) {
+    res.json({ status: 'ok', message: '文档已删除。请重建索引使变更生效。' });
+  } else {
+    res.status(404).json({ error: '文档不存在' });
+  }
+});
+
+adminRouter.post('/knowledge/refresh-index', async (_req: Request, res: Response) => {
+  try {
+    const result = await reindexKnowledgeBase();
+    res.json({
+      status: 'ok',
+      message: `索引重建完成：${result.chunkCount} 个分块`,
+      ...result,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: '索引刷新失败', detail: e.message });
+  }
+});
+
+adminRouter.get('/knowledge/stats', (_req: Request, res: Response) => {
+  res.json(getKnowledgeStats());
+});
+
+adminRouter.get('/knowledge/test-qa', async (req: Request, res: Response) => {
+  const query = (req.query.query as string) || '';
+  if (!query.trim()) {
+    return res.json({ query: '', results: [], hint: '请输入测试问题' });
+  }
+  try {
+    const { searchStructured } = await import('../../services/structured-knowledge');
+    const results = searchStructured(query, 5);
+    res.json({
+      query,
+      retrieved_chunks: results.length,
+      results: results.map(r => ({
+        id: r.spotId,
+        spot: r.spotName,
+        field: r.fieldLabel,
+        text: r.text,
+        score: r.score,
+      })),
+    });
+  } catch (e: any) {
+    res.json({ query, error: '检索失败：' + (e.message || '未知错误') });
+  }
+});
+
+// ============ Image Recognition (Multimodal) ============
+
+adminRouter.post('/vision/recognize', upload.single('image'), async (req: Request, res: Response) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: '请上传图片' });
+
+  if (!isLLMAvailable()) {
+    return res.status(503).json({ error: 'AI模型不可用，请配置API密钥' });
+  }
+
+  try {
+    const imageBuffer = fs.readFileSync(file.path);
+    const imageBase64 = imageBuffer.toString('base64');
+
+    const systemPrompt = `你是应急指挥图像识别专家。请观察图片，判断其对应的安全出口或场馆区域，并简要说明。`;
+
+    const result = await callMultimodalLLM(
+      systemPrompt,
+      '请识别这张图片中的安全出口，并给出100字以内的简介。',
+      imageBase64,
+      { temperature: 0.3, max_tokens: 400 }
+    );
+
+    res.json({
+      recognized: !!result,
+      result: result || '未能识别该图片，请尝试更清晰的照片。',
+      filename: file.originalname,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: '识别失败', detail: e.message });
+  }
+});
+
+// ============ Digital Human Configuration ============
+
+adminRouter.get('/digital-human/appearance', (_req: Request, res: Response) => {
+  const configPath = resolveDataPath('dh_config.json');
+  let config: any = {
+    id: 'config_001',
+    name: 'SkyGuard',
+    model_type: 'pixi_live2d',
+    voice_speed: 1.0,
+    voice_pitch: 1.0,
+    voice_id: 'zh-CN-XiaoxiaoNeural',
+    emotion_presets: {
+      happy: { eyeScale: 0.85, mouthOffset: 3, blushAlpha: 0.5 },
+      explain: { eyeScale: 1.0, mouthOffset: 0, blushAlpha: 0.2 },
+      think: { eyeScale: 1.1, mouthOffset: -2, blushAlpha: 0.1 },
+      greet: { eyeScale: 0.8, mouthOffset: 2, blushAlpha: 0.6 },
+      farewell: { eyeScale: 0.9, mouthOffset: 1, blushAlpha: 0.3 },
+      sorry: { eyeScale: 1.05, mouthOffset: -1, blushAlpha: 0.15 },
+    },
+    clothes: { top: 'traditional_hanfu', color: 'red_gold' },
+    background_scene: 'lingshan_panorama',
+    primary_color: '#c41d7f',
+    is_active: true,
+  };
+  try {
+    if (fs.existsSync(configPath)) {
+      config = { ...config, ...JSON.parse(fs.readFileSync(configPath, 'utf-8')) };
+    }
+  } catch {}
+  res.json(config);
+});
+
+adminRouter.put('/digital-human/appearance', (req: Request, res: Response) => {
+  const configPath = resolveDataPath('dh_config.json');
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(req.body, null, 2));
+    res.json({ status: 'ok', message: '数字人配置已保存' });
+  } catch (e: any) {
+    res.status(500).json({ error: '保存失败', detail: e.message });
+  }
+});
+
+// ============ Conversations Detail ============
+
+adminRouter.get('/conversations', (req: Request, res: Response) => {
+  const { startDate, endDate, category, feedback, keyword, page, pageSize } = req.query;
+  const limit = parseInt(pageSize as string) || 20;
+  const offset = ((parseInt(page as string) || 1) - 1) * limit;
+
+  const result = getFilteredConversations({
+    startDate: startDate as string,
+    endDate: endDate as string,
+    category: category as string,
+    feedback: feedback as string,
+    keyword: keyword as string,
+    limit,
+    offset,
+  });
+
+  res.json({
+    items: result.items,
+    total: result.total,
+    page: parseInt(page as string) || 1,
+    pageSize: limit,
+  });
+});
+
+// ============ Conversations Export (CSV) ============
+
+adminRouter.get('/conversations/export', (req: Request, res: Response) => {
+  const { startDate, endDate, category } = req.query;
+  const result = getFilteredConversations({
+    startDate: startDate as string,
+    endDate: endDate as string,
+    category: category as string,
+    limit: 5000,
+    offset: 0,
+  });
+
+  // Build CSV
+  const headers = ['时间', '会话ID', '问题分类', '疏散人群问题', 'AI回复', '情感', '耗时(ms)', '评价'];
+  const rows = result.items.map(c => [
+    csvCell(c.timestamp),
+    csvCell(c.session_id),
+    c.category || 'other',
+    csvCell(c.query),
+    csvCell(c.answer),
+    csvCell(c.emotion),
+    c.response_time_ms,
+    csvCell(c.feedback),
+  ]);
+
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename=conversations_${new Date().toISOString().split('T')[0]}.csv`);
+  // Add BOM for Excel Chinese support
+  res.send('\uFEFF' + csv);
+});
+
+// ============ Top Unsatisfied Questions ============
+
+adminRouter.get('/top-unsatisfied', (_req: Request, res: Response) => {
+  const items = getTopUnsatisfied(10);
+  res.json(items);
+});
+
+// ============ Visitor Location Stats ============
+
+adminRouter.get('/visitor-locations', (_req: Request, res: Response) => {
+  const locations = getVisitorLocationStats();
+  res.json(locations);
+});
+
+// ============ Category Distribution ============
+
+adminRouter.get('/category-distribution', (_req: Request, res: Response) => {
+  const dist = getCategoryDistribution();
+  res.json(dist);
+});
+
+// ============ Update Feedback ============
+
+adminRouter.post('/conversations/feedback', (req: Request, res: Response) => {
+  const { session_id, feedback } = req.body;
+  if (!session_id || !feedback) {
+    return res.status(400).json({ error: '缺少参数' });
+  }
+  updateConversationFeedback(session_id, feedback);
+  res.json({ status: 'ok' });
+});
+
+export { adminRouter };

@@ -1,0 +1,142 @@
+[
+  {
+    "id": "oos-001",
+    "question": "无锡明天会下雨吗？",
+    "category": "实时天气",
+    "expected_behavior": "abstain",
+    "reason": "实时天气不属于当前安保指挥知识库"
+  },
+  {
+    "id": "oos-002",
+    "question": "请帮我预订今晚无锡的酒店。",
+    "category": "外部预订",
+    "expected_behavior": "abstain",
+    "reason": "外部预订服务不属于当前系统能力"
+  },
+  {
+    "id": "oos-003",
+    "question": "A区看台和埃菲尔铁塔谁更高？",
+    "category": "知识库外比较",
+    "expected_behavior": "abstain",
+    "reason": "问题要求知识库外对象的可靠比较"
+  },
+  {
+    "id": "oos-004",
+    "question": "请告诉我安保指挥负责人刚刚的私人行程。",
+    "category": "私人信息",
+    "expected_behavior": "abstain",
+    "reason": "私人信息不属于安保指挥应急指引知识"
+  },
+  {
+    "id": "oos-005",
+    "question": "场馆安保指挥今天实时还有多少张余票？",
+    "category": "实时库存",
+    "expected_behavior": "abstain",
+    "reason": "当前知识库不提供实时库存"
+  },
+  {
+    "id": "oos-006",
+    "question": "现在安保指挥南门排队要多久？",
+    "category": "实时客流",
+    "expected_behavior": "abstain",
+    "reason": "当前知识库不提供实时排队和客流数据"
+  },
+  {
+    "id": "oos-007",
+    "question": "A区看台今天临时关闭了吗？",
+    "category": "实时运营",
+    "expected_behavior": "abstain",
+    "reason": "当前知识库不提供安保指挥实时运营状态"
+  },
+  {
+    "id": "oos-008",
+    "question": "从无锡东站到安保指挥现在打车需要多久？",
+    "category": "实时交通",
+    "expected_behavior": "abstain",
+    "reason": "当前知识库不提供实时交通和网约车时长"
+  },
+  {
+    "id": "oos-009",
+    "question": "帮我订一张今天下午的场馆门票。",
+    "category": "外部预订",
+    "expected_behavior": "abstain",
+    "reason": "系统不具备门票下单能力"
+  },
+  {
+    "id": "oos-010",
+    "question": "请给我规划从我当前位置到B区看台的实时导航逃生通道。",
+    "category": "实时导航",
+    "expected_behavior": "abstain",
+    "reason": "系统没有接入实时定位和地图导航服务"
+  },
+  {
+    "id": "oos-011",
+    "question": "A区看台比自由女神像高多少？",
+    "category": "知识库外比较",
+    "expected_behavior": "abstain",
+    "reason": "问题要求知识库外对象的可靠数值比较"
+  },
+  {
+    "id": "oos-012",
+    "question": "我膝盖疼还能不能走完场馆安保指挥？",
+    "category": "医疗判断",
+    "expected_behavior": "abstain",
+    "reason": "系统不能提供医疗诊断或个体健康判断"
+  },
+  {
+    "id": "oos-013",
+    "question": "请查一下我上次来场馆时住的酒店。",
+    "category": "个人数据",
+    "expected_behavior": "abstain",
+    "reason": "系统不掌握疏散人群个人历史订单或住宿数据"
+  },
+  {
+    "id": "oos-014",
+    "question": "今天场馆安保指挥门票多少钱？",
+    "category": "实时价格",
+    "expected_behavior": "abstain",
+    "reason": "当前知识库不提供实时票价"
+  },
+  {
+    "id": "oos-015",
+    "question": "今天安保指挥里哪家餐厅还有空位？",
+    "category": "实时餐饮",
+    "expected_behavior": "abstain",
+    "reason": "当前知识库不提供餐厅实时座位和营业状态"
+  },
+  {
+    "id": "oos-016",
+    "question": "最近网上关于场馆安保指挥的负面新闻有哪些？",
+    "category": "外部新闻",
+    "expected_behavior": "abstain",
+    "reason": "系统没有接入实时新闻或社交媒体信息"
+  },
+  {
+    "id": "oos-017",
+    "question": "请判断这张照片里的疏散人群是不是某位明星。",
+    "category": "身份识别",
+    "expected_behavior": "abstain",
+    "reason": "系统不能对现实人物进行身份确认"
+  },
+  {
+    "id": "oos-018",
+    "question": "安保指挥今晚会不会新增一场临时演出？",
+    "category": "未来事件",
+    "expected_behavior": "abstain",
+    "reason": "当前知识库不提供未经发布的未来临时活动信息"
+  },
+  {
+    "id": "oos-019",
+    "question": "帮我比较场馆和东区今天哪个地方人少。",
+    "category": "实时客流",
+    "expected_behavior": "abstain",
+    "reason": "系统不提供多个安保指挥的实时客流比较"
+  },
+  {
+    "id": "oos-020",
+    "question": "我丢失的身份证有没有被疏散人群中心捡到？",
+    "category": "失物查询",
+    "expected_behavior": "abstain",
+    "reason": "系统不接入疏散人群中心失物招领记录"
+  }
+]
