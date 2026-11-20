@@ -1,0 +1,5 @@
+.segment-switch { display: flex; min-width: 0; padding: 3px; border: 1px solid var(--border); background: var(--panel); }
+.segment-switch button { display: grid; gap: 1px; min-width: 105px; padding: 5px 9px; border: 0; color: var(--muted); background: transparent; cursor: pointer; }
+.segment-switch button[data-active="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.segment-switch small { color: var(--faint); font: 10px var(--font-mono); }
+@media (max-width: 650px) { .segment-switch { width: 100%; } .segment-switch button { flex: 1; min-width: 0; padding-inline: 3px; font-size: 11px; } }

@@ -1,0 +1,19 @@
+.sg-topbar { position: relative; z-index: 20; display: flex; align-items: center; gap: 22px; min-height: 66px; padding: 10px 22px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.sg-brand { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; color: var(--text); text-decoration: none; font: 700 13px var(--font-display); }
+.sg-brand small { display: block; color: var(--muted); font: 10px var(--font-sans); }
+.sg-mark { display: grid; place-items: center; width: 34px; aspect-ratio: 1; color: var(--bg); background: var(--accent); font: 800 19px var(--font-display); }
+.sg-topbar nav { display: flex; align-items: center; gap: 3px; flex: 1; }
+.sg-topbar nav a,.sg-login { padding: 8px 10px; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.sg-topbar nav a.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.sg-top-actions { position: relative; display: flex; align-items: center; gap: 10px; }
+.sg-local-tag { color: var(--muted); font: 10px var(--font-mono); white-space: nowrap; }
+.sg-local-tag i { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--warn); }
+.sg-demo-wrap { position: relative; }
+.sg-demo-button { padding: 8px 11px; border: 1px solid var(--accent); color: var(--accent); background: transparent; white-space: nowrap; cursor: pointer; }
+.sg-demo-menu { position: absolute; top: calc(100% + 7px); right: 0; display: grid; width: 245px; border: 1px solid var(--border-strong); background: var(--panel-2); box-shadow: 0 12px 30px #0008; }
+.sg-demo-menu button { padding: 10px 12px; border: 0; border-bottom: 1px solid var(--border); color: var(--text); text-align: left; background: transparent; cursor: pointer; }
+.sg-demo-menu button:hover { color: var(--accent); background: var(--panel); }
+.sg-demo-menu button:disabled { opacity: .5; }
+.sg-top-message { position: absolute; top: calc(100% + 4px); right: 20px; padding: 6px 10px; border: 1px solid var(--border); background: var(--panel-2); }
+@media (max-width: 1050px) { .sg-topbar { flex-wrap: wrap; gap: 8px 16px; } .sg-topbar nav { order: 3; flex-basis: 100%; overflow-x: auto; } .sg-topbar > .segment-switch { order: 2; flex: 1; } .sg-top-actions { margin-left: auto; } }
+@media (max-width: 560px) { .sg-topbar { padding: 9px 12px; } .sg-local-tag { display: none; } .sg-demo-button { padding: 7px; font-size: 11px; } .sg-topbar nav a { padding: 7px; font-size: 11px; } }

@@ -18,6 +18,11 @@
   --degraded: #ff9b57;
   --bad: #ff6b81;
   --info: #7aa2ff;
+  --dens-0: #3a4657;
+  --dens-1: #3d6ea8;
+  --dens-2: #b8832f;
+  --dens-3: #d96a2c;
+  --dens-4: #d63a4d;
   color-scheme: dark;
 }
 
@@ -41,6 +46,11 @@ button, input, select, textarea { font: inherit; }
 *::-webkit-scrollbar-thumb { background: #2a3b55; border-radius: 9px; border: 2px solid transparent; background-clip: content-box; }
 *::-webkit-scrollbar-thumb:hover { background: #3d5474; background-clip: content-box; }
 *::-webkit-scrollbar-track { background: transparent; }
+
+.page-shell { max-width: 1800px; margin: 0 auto; padding: 28px; }
+.page-shell h1 { margin: 0 0 8px; font: 600 25px var(--font-display); }
+.page-shell > p:not(.page-eyebrow) { color: var(--muted); }
+.page-eyebrow { margin: 0 0 6px; color: var(--accent); font: 10px var(--font-mono); }
 
 .app-loading {
   min-height: 100vh;
