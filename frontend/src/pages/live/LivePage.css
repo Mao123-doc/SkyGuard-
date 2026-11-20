@@ -10,5 +10,18 @@
 .live-center-stack { display: grid; grid-template-rows: minmax(330px, 1fr) minmax(260px, .8fr); gap: 14px; min-width: 0; }
 .live-error { padding: 9px 12px; border-left: 2px solid var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 6%, var(--panel)); }
 .live-notice { padding: 12px 2px 0; color: var(--faint); font-size: 10px; }
+.live-monitor,.live-map-panel { min-width: 0; padding: 14px; border: 1px solid var(--border); background: var(--panel); }
+.live-monitor header,.live-map-panel header { display: flex; justify-content: space-between; align-items: center; color: var(--muted); }
+.live-monitor header span,.live-map-panel header div > span { color: var(--accent); font: 9px var(--font-mono); }
+.live-monitor h2,.live-map-panel h2 { margin: 2px 0 10px; color: var(--text); font-size: 15px; }
+.live-signal-offline { display: grid; place-content: center; gap: 6px; min-height: 250px; border: 1px solid var(--border-strong); color: var(--muted); text-align: center; background: var(--bg); }
+.live-signal-offline strong { color: var(--faint); font: 14px var(--font-mono); }
+.live-monitor > p,.live-map-validation { color: var(--faint); font-size: 9px; }
+.live-map-panel .cc-map { display: block; width: 100%; height: min(66vh, 700px); min-height: 390px; }
+.map-region[data-density-level="0"] { fill: color-mix(in srgb, var(--dens-0) 35%, transparent); }
+.map-region[data-density-level="1"] { fill: color-mix(in srgb, var(--dens-1) 45%, transparent); }
+.map-region[data-density-level="2"] { fill: color-mix(in srgb, var(--dens-2) 55%, transparent); }
+.map-region[data-density-level="3"] { fill: color-mix(in srgb, var(--dens-3) 62%, transparent); }
+.map-region[data-density-level="4"] { fill: color-mix(in srgb, var(--dens-4) 72%, transparent); }
 @media (max-width: 1160px) { .live-entry-grid { grid-template-columns: minmax(280px, .9fr) minmax(360px, 1.1fr); } .live-entry-grid > :last-child { grid-column: 1 / -1; } }
 @media (max-width: 720px) { .live-content { padding: 12px; } .live-summary { gap: 7px; } .live-summary > div { min-height: 68px; padding: 9px; } .live-summary strong { font-size: 18px; } .live-entry-grid { grid-template-columns: minmax(0, 1fr); } .live-center-stack { grid-template-rows: auto auto; } .live-entry-grid > :last-child { grid-column: auto; } }

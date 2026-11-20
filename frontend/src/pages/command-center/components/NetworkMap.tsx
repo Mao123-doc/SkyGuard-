@@ -287,6 +287,7 @@ function NetworkMap({ map, status, selectedRegion, onSelectRegion, allowRoutes, 
               height={geometry.height}
               rx={10}
               className={`map-region risk-${layers.risks ? risk?.level ?? 'unknown' : 'unknown'}`}
+              data-density-level={risk?.density === null || risk?.density === undefined ? '0' : risk.density < 3 ? '0' : risk.density < 4 ? '1' : risk.density < 5 ? '2' : risk.density < 6 ? '3' : '4'}
             />
             <circle cx={centreOf(region).x} cy={centreOf(region).y} r={5} className={`map-node risk-${risk?.level ?? 'unknown'}`} />
             <text x={geometry.x + geometry.width / 2} y={geometry.y + geometry.height / 2 + 9} textAnchor="middle" className="map-region-name">
