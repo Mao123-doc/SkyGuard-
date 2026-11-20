@@ -1,0 +1,15 @@
+.verdict-panel { padding: 15px; }
+.verdict-segment { color: var(--muted); font-size: 10px; }
+.verdict-main { display: grid; gap: 5px; padding: 16px; border: 1px solid var(--border-strong); background: var(--panel-2); }
+.verdict-main small { color: var(--muted); font-size: 10px; }
+.verdict-main strong { color: var(--text); font: 650 23px var(--font-display); }
+.verdict-main > span { color: var(--muted); font-size: 11px; }
+.verdict-main.state-normal { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); }
+.verdict-main.state-reroute { border-color: color-mix(in srgb, var(--info) 65%, var(--border)); }
+.verdict-main.state-degraded { border-color: var(--degraded); }
+.verdict-main.state-reject { border-color: var(--bad); }
+.verdict-block { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--border); }
+.verdict-block h3 { margin: 0 0 6px; color: var(--muted); font-size: 10px; font-weight: 600; }
+.verdict-block p { margin: 4px 0; color: var(--text); font-size: 10px; }
+.verdict-block .verdict-risk { color: var(--warn); }
+.verdict-empty { display: grid; min-height: 240px; place-items: center; color: var(--muted); }

@@ -11,12 +11,12 @@ function savedSegment(): TimeSegment {
   return value === 'entry' || value === 'active' || value === 'exit' ? value : 'entry';
 }
 
-export default function TopBar({ showSegments = false }: { showSegments?: boolean }) {
+export default function TopBar({ showSegments = false, onSegmentChange }: { showSegments?: boolean; onSegmentChange?: (value: TimeSegment) => void }) {
   const [segment, setSegment] = useState<TimeSegment>(savedSegment);
   const [demoOpen, setDemoOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const choose = (value: TimeSegment) => { localStorage.setItem(segmentKey, value); setSegment(value); };
+  const choose = (value: TimeSegment) => { localStorage.setItem(segmentKey, value); setSegment(value); onSegmentChange?.(value); };
   const run = async (scenario: 'A_normal' | 'B_surge' | 'C_untrusted') => {
     setBusy(true); setMessage('');
     try { await mvpApi.runDemo(scenario); setMessage('演示数据已注入'); }
