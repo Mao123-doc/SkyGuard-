@@ -1,0 +1,49 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 运行时数据（每次运行重新生成）
+data/audit/
+data/admin_config.json
+data/*.json
+
+# 环境变量与密钥
+.env
+.env.*
+!.env.example
+
+# 前端构建产物
+frontend/dist/
+frontend/node_modules/
+
+# 临时与日志
+*.log
+.DS_Store
+Thumbs.db
+
+# V6.1 证据治理：不忽略 raw JSON，只忽略临时文件
+evaluation/**/*.tmp
+evaluation/**/*.log
+
+# V6.3 真实数据：数据集/权重不进入仓库
+evaluation/real-data/dataset/
+evaluation/real-data/weights/
+*.pth
+*.zip
+
+# 感知回放展示包：派生点位 PROVENANCE 入库，航拍底图许可未确认，不随仓库分发
+data/perception/**/*.jpg
+data/perception/**/*.jpeg
+data/perception/**/*.png
+
+# Python cache
+__pycache__/
+*.pyc
+
+# 生成的参赛提交包（可用 scripts/build-submission.mjs 重新生成）
+submission/SkyGuard-submission-*/
+submission/*.zip
+submission/*.zip.sha256
+
+# 本地演示运行产物（可用 frontend/e2e/capture-submission.mjs 重跑）
+submission/demo-run-*/

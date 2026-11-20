@@ -1,0 +1,35 @@
+# 字节稳定性约定
+#
+# data/perception/<package>/PROVENANCE.json 登记了各文件的 SHA-256，校验以
+# "检出后的工作区字节"为准（见 backend/tests/perception/display-api.test.ts）。
+# 因此该目录禁止 Git 做换行符转换，否则在 Windows(autocrlf=true) 与 Linux 之间
+# 来回检出会改变文件字节数并使哈希校验失败。
+data/perception/** -text
+
+# 本仓库自己维护的来源清单保持文本 + LF，便于 review 与 diff。
+data/perception/**/PROVENANCE.json text eol=lf
+
+# 实验证据以 SHA-256 清单校验，必须保持检出字节稳定；禁止换行符转换。
+evaluation/** text eol=lf
+
+# 二进制证据禁止换行符转换：Git 的 text 过滤会把 PNG 中的 0x0D0A 当作 CRLF
+# 改写，导致提交后的字节与清单不一致。
+evaluation/**/*.png -text
+evaluation/**/*.jpg -text
+evaluation/**/*.jpeg -text
+evaluation/**/*.gif -text
+evaluation/**/*.webp -text
+evaluation/**/*.pdf -text
+evaluation/**/*.onnx -text
+evaluation/**/*.zip -text
+evaluation/**/*.gz -text
+evaluation/**/*.pt -text
+evaluation/**/*.pth -text
+evaluation/**/*.bin -text
+
+# V7.2 冻结基线清单按生成时的原始字节记录；eol 转换会使冻结哈希在
+# Linux 检出时失配。该目录保持原始字节，不做换行符归一化。
+evaluation/v72/baseline_snapshot/** -text
+
+# V7.5 最终证据清单同样记录生成时字节；保持原样以便跨平台校验。
+evaluation/v75/v75-final-20261110/** -text
