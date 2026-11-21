@@ -50,7 +50,7 @@ export default function LoginPage() {
       <div className="login-shell">
         <section className="login-hero" aria-label="SkyGuard 简介">
           <span className="login-mark" aria-hidden="true"><SafetyCertificateOutlined /></span>
-          <p className="login-eyebrow">SKYGUARD · TRUSTED EVACUATION INTELLIGENCE</p>
+          <p className="login-eyebrow">SKYGUARD · 可信疏散决策</p>
           <h1>可信安全决策<br /><span>指挥中心</span></h1>
           <p className="login-lede">
             面向大型活动散场的主动感知、风险评估与可审计疏散决策。四态安全内核与独立校验保证「不可用即拒绝」。
