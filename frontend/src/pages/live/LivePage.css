@@ -1,10 +1,11 @@
 .live-page { min-height: 100vh; background: var(--bg); }
 .live-content { width: min(1920px, 100%); margin: 0 auto; padding: 16px 22px 24px; }
 .live-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
-.live-summary > div { display: grid; gap: 3px; min-height: 78px; padding: 12px 16px; border: 1px solid var(--border); background: var(--panel); }
+.live-summary > div { display: grid; align-content: start; gap: 3px; min-height: 78px; padding: 12px 16px; border: 1px solid var(--border); background: var(--panel); }
 .live-summary span { color: var(--muted); font-size: 11px; }
 .live-summary strong { color: var(--text); font: 650 25px var(--font-display); }
 .live-summary strong small { margin-left: 8px; color: var(--muted); font: 11px var(--font-sans); }
+.live-summary > div > small { color: var(--faint); font-size: 9px; }
 .live-summary .is-warn { color: var(--warn); }
 .live-entry-grid { display: grid; grid-template-columns: minmax(330px, .95fr) minmax(500px, 1.55fr) minmax(300px, .8fr); align-items: stretch; gap: 14px; }
 .live-center-stack { display: grid; grid-template-rows: minmax(330px, 1fr) minmax(260px, .8fr); gap: 14px; min-width: 0; }

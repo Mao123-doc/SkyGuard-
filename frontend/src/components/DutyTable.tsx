@@ -9,7 +9,7 @@ export default function DutyTable({ exits, staff, regions, observations, loading
     if (!current || Date.parse(observation.observed_at) > Date.parse(current.observed_at)) latestByRegion.set(observation.region_id, observation);
   }
   return <section className="duty-panel">
-    <header className="duty-heading"><div><span className="duty-kicker">ENTRY CONTROL</span><h2>入口值守与指令</h2></div><span className="duty-count">{loading ? '读取中' : `${exits.length} 个入口`}</span></header>
+    <header className="duty-heading"><div><span className="duty-kicker">入口管控</span><h2>入口值守与指令</h2></div><span className="duty-count">{loading ? '读取中' : `${exits.length} 个入口`}</span></header>
     <p className="duty-subtitle">系统建议与当前指令分别展示；数据由安全状态与人员 API 提供。</p>
     <div className="duty-table-wrap"><table className="duty-table"><thead><tr><th>入口</th><th>值守人</th><th>排队（区域在场）</th><th>系统建议</th><th>当前指令</th></tr></thead>
       <tbody>{exits.map(exit => {

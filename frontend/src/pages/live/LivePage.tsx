@@ -43,19 +43,19 @@ function StaffContract({ staff, exits, loading }: { staff: StaffMember[]; exits:
   </section>;
 }
 
-function LiveSummary({ count, capacity, restricted }: { count: number | null; capacity: number | null; restricted: number }) {
+function LiveSummary({ count, capacity, suggested, source }: { count: number | null; capacity: number | null; suggested: number | null; source: string }) {
   const number = (value: number | null) => value === null ? '—' : value.toLocaleString('zh-CN');
   return <section className="live-summary" aria-label="当前场馆指标">
-    <div><span>场内观测人数</span><strong>{number(count)}<small>人</small></strong></div>
-    <div><span>场景区域容量合计</span><strong>{number(capacity)}<small>人</small></strong></div>
-    <div><span>受限入口</span><strong className={restricted ? 'is-warn' : ''}>{restricted}<small>个</small></strong></div>
+    <div><span>抽样估测人数</span><strong>{number(count)}{count !== null ? <small>人</small> : null}</strong><small>{source}</small></div>
+    <div><span>区域容量合计</span><strong>{number(capacity)}<small>人</small></strong></div>
+    <div><span>建议疏散区域</span><strong className={suggested ? 'is-warn' : ''}>{suggested ?? '—'}{suggested !== null ? <small>个</small> : null}</strong></div>
   </section>;
 }
 
 function OfflineMonitor() {
   return <section className="live-monitor">
-    <header><div><span>CAMERA MONITOR</span><h2>现场监控</h2></div></header>
-    <div className="live-signal-offline"><strong>SIGNAL OFFLINE</strong><span>未接入实时视频源</span></div>
+    <header><div><span>现场监控</span><h2>现场监控</h2></div></header>
+    <div className="live-signal-offline"><strong>视频信号未接入</strong><span>未接入实时视频源</span></div>
     <p>摄像头列表与健康状态见无人机/摄像头状态；不生成缩略画面。</p>
   </section>;
 }
@@ -73,7 +73,7 @@ function LiveDataLegend() {
     ['研究边界', '场景参数为合成 / 估算值，未现场标定。'],
   ];
   return <section className="live-data-legend">
-    <header><span>DATA CONTRACT</span><h2>数据边界</h2></header>
+    <header><span>数据来源</span><h2>数据边界</h2></header>
     <div>
       {items.map(([title, detail]) => <article key={title}><strong>{title}</strong><p>{detail}</p></article>)}
     </div>
@@ -81,15 +81,17 @@ function LiveDataLegend() {
 }
 
 function DecisionPipeline({ status }: { status: SafetyStatus | null }) {
+  const stateNames: Record<string, string> = { NORMAL: '常态运行', REROUTE: '事件重构', DEGRADED: '感知降级', REJECT: '安全拒绝' };
+  const planNames: Record<string, string> = { feasible: '可行', partial: '部分可行', infeasible: '不可行' };
   const stages = [
     ['观测', status ? `${status.observations.length} 条` : '—'],
     ['风险评估', status?.risk_summary.highest ?? '—'],
-    ['容量规划', status?.candidate_plan?.status ?? status?.plan?.status ?? '—'],
+    ['容量规划', planNames[status?.candidate_plan?.status ?? status?.plan?.status ?? ''] ?? '—'],
     ['独立校验', status?.validation ? status.validation.valid ? '通过' : '未通过' : '—'],
-    ['四态决策', status?.state.state ?? '—'],
+    ['四态决策', stateNames[status?.state.state ?? ''] ?? '—'],
   ];
   return <section className="live-pipeline">
-    <header><div><span>SAFETY DECISION ENGINE</span><h2>安全决策引擎</h2></div><small>GET /api/v1/safety/status</small></header>
+    <header><div><span>安全决策引擎</span><h2>安全决策引擎</h2></div><small>GET /api/v1/safety/status</small></header>
     <ol>{stages.map(([label, value], index) => <li key={label}><i>{index + 1}</i><span>{label}</span><strong>{value}</strong></li>)}</ol>
     {!status ? <p>暂无安全状态数据</p> : <p>{status.state.headline}</p>}
   </section>;
@@ -99,7 +101,7 @@ function ExitOperations({ status, dashboard }: { status: SafetyStatus | null; da
   const plan = status?.plan ?? status?.candidate_plan ?? null;
   const activeOrders = dashboard?.work_orders.filter(order => !['COMPLETED', 'FAILED', 'REJECTED'].includes(order.status)) ?? [];
   return <section className="live-exit-ops">
-    <header><div><span>EXIT OPERATIONS</span><h2>疏散任务状态</h2></div><small>安全方案 + MVP 工单</small></header>
+    <header><div><span>疏散任务状态</span><h2>疏散任务状态</h2></div><small>安全方案 + 业务工单</small></header>
     <div className="live-exit-kpis"><div><span>方案状态</span><strong>{plan?.status ?? '—'}</strong></div><div><span>已分配</span><strong>{plan ? `${plan.evacuated_persons}/${plan.total_persons}` : '—'}</strong></div><div><span>活动工单</span><strong>{dashboard ? activeOrders.length : '—'}</strong></div></div>
     <h3>出口分配</h3>
     {plan?.exit_totals.length ? <ul>{plan.exit_totals.map(item => <li key={item.exit_id}><span>{item.exit_id}</span><strong>{item.persons} 人</strong></li>)}</ul> : <p className="live-empty">暂无出口分配数据</p>}
@@ -131,13 +133,24 @@ export default function LivePage() {
     return () => window.clearInterval(timer);
   }, [refresh]);
   const liveStatus = dashboard?.safety ?? status;
-  const restrictedExits = liveStatus?.exits.filter(exit => !exit.usable || exit.effective_status !== 'open').length ?? 0;
-  const latestCount = liveStatus?.observations.reduce((sum, observation) => sum + observation.estimated_count, 0) ?? null;
+  const latestByRegion = new Map<string, SafetyStatus['observations'][number]>();
+  for (const observation of liveStatus?.observations ?? []) {
+    if (!observation.valid) continue;
+    const previous = latestByRegion.get(observation.region_id);
+    if (!previous || Date.parse(observation.observed_at) > Date.parse(previous.observed_at)) latestByRegion.set(observation.region_id, observation);
+  }
+  const latestCount = latestByRegion.size ? [...latestByRegion.values()].reduce((sum, observation) => sum + observation.estimated_count, 0) : null;
   const capacity = scenario?.regions.reduce((sum, region) => sum + region.holding_capacity_persons, 0) ?? null;
+  const suggestedRegions = latestByRegion.size && scenario ? scenario.regions.filter(region => {
+    const observation = latestByRegion.get(region.id);
+    return observation && region.holding_capacity_persons > 0 && observation.estimated_count / region.holding_capacity_persons > 0.85;
+  }).length : null;
+  const latestObservedAt = [...latestByRegion.values()].reduce<string | null>((latest, observation) => !latest || Date.parse(observation.observed_at) > Date.parse(latest) ? observation.observed_at : latest, null);
+  const observationSource = latestByRegion.size === 0 ? '暂无观测' : [...latestByRegion.values()].some(item => item.source === 'simulation') ? '演示数据' : `采样于 ${new Date(latestObservedAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
   return <div className="live-page">
     <TopBar showSegments onSegmentChange={setSegment} />
     <main className="live-content">
-      <LiveSummary count={latestCount} capacity={capacity} restricted={status ? restrictedExits : 0} />
+      <LiveSummary count={latestCount} capacity={capacity} suggested={suggestedRegions} source={observationSource} />
       {error ? <p className="live-error" role="alert">当前数据读取失败：{error}；请勿将缓存或空值视为实时状态。</p> : null}
       <div className="live-entry-grid">
         {segment === 'entry' ? <>
@@ -151,7 +164,7 @@ export default function LivePage() {
           <div className="live-right-stack"><VerdictCard status={liveStatus} cameras={dashboard?.cameras ?? []} segment={segment} loading={!liveStatus || !dashboard} /><DecisionPipeline status={liveStatus} /></div>
         </> : <>
           <OccupancyGrid regions={scenario?.regions ?? liveStatus?.regions ?? []} risks={dashboard?.safety.risks ?? []} observations={dashboard?.safety.observations ?? []} loading={!dashboard} />
-          {liveStatus ? <section className="live-map-panel"><header><div><span>EVACUATION NETWORK</span><h2>疏散路线图</h2></div><span>{liveStatus.state.state}</span></header><NetworkMap map={scenario?.map} status={liveStatus} selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} allowRoutes={!error} zoom={mapZoom} setZoom={setMapZoom} center={mapCenter} setCenter={setMapCenter} showBackdrop={false} layers={layers} /><div className="live-map-validation">{liveStatus.validation ? `独立校验：${liveStatus.validation.valid ? '通过' : '未通过'}` : '独立校验结果：暂无记录'} · 路线显示遵循后端安全状态</div></section> : <section className="live-map-panel live-signal-offline">正在读取网络状态…</section>}
+          {liveStatus ? <section className="live-map-panel"><header><div><span>疏散路线图</span><h2>疏散路线图</h2></div><span>{{ NORMAL: '常态运行', REROUTE: '事件重构', DEGRADED: '感知降级', REJECT: '安全拒绝' }[liveStatus.state.state]}</span></header><NetworkMap map={scenario?.map} status={liveStatus} selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} allowRoutes={!error} zoom={mapZoom} setZoom={setMapZoom} center={mapCenter} setCenter={setMapCenter} showBackdrop={false} layers={layers} /><div className="live-map-validation">{liveStatus.validation ? `独立校验：${liveStatus.validation.valid ? '通过' : '未通过'}` : '独立校验结果：暂无记录'} · 路线显示遵循后端安全状态</div></section> : <section className="live-map-panel live-signal-offline">正在读取网络状态…</section>}
           <div className="live-right-stack"><VerdictCard status={liveStatus} cameras={dashboard?.cameras ?? []} segment={segment} loading={!liveStatus || !dashboard} /><ExitOperations status={liveStatus} dashboard={dashboard} /></div>
         </>}
       </div>
