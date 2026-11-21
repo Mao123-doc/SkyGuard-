@@ -1,10 +1,23 @@
 {
   "extends": "hankou-marshland-v752-base.json",
   "overrides": {
+    "simulation_baseline": {
+      "R_GATE_01_PLAZA": { "count": 500, "confidence": 0.9 },
+      "R_GATE_02_PLAZA": { "count": 300, "confidence": 0.9 },
+      "R_GATE_03_PLAZA": { "count": 300, "confidence": 0.9 },
+      "R_GATE_04_PLAZA": { "count": 400, "confidence": 0.9 },
+      "R_GATE_05_PLAZA": { "count": 400, "confidence": 0.9 },
+      "R_GATE_06_PLAZA": { "count": 300, "confidence": 0.9 },
+      "R_GATE_07_PLAZA": { "count": 500, "confidence": 0.9 },
+      "R_GATE_08_PLAZA": { "count": 300, "confidence": 0.9 },
+      "R_GATE_09_PLAZA": { "count": 300, "confidence": 0.9 },
+      "R_GATE_10_PLAZA": { "count": 400, "confidence": 0.9 },
+      "R_GATE_11_PLAZA": { "count": 400, "confidence": 0.9 }
+    },
     "scenario_id": "hankou-mvp-v1",
     "name": "武汉汉口江滩 · MVP 人群疏散场景",
     "version": "7.6.0",
-    "description": "武汉汉口江滩 (一期与二期，江汉门至长江二桥段，总长 3.6 km) 人群疏散 MVP 场景。几何、容量与区域拓扑派生自冻结的 V7.5 研究场景 hankou-marshland.json，未改动任何区域/通道/出口参数；仅补充 MVP 运行所需的岗位技能、调查联合配置与 UI 演示时间序列。",
+    "description": "武汉汉口江滩 (一期与二期，江汉门至长江二桥段，总长 3.6 km) 人群疏散 MVP 场景。几何、容量与区域拓扑派生自冻结的 V7.5 研究场景 hankou-marshland.json，未改动任何区域/通道/出口参数；仅补充 MVP 运行所需的岗位技能、调查联合配置与 UI 演示时间序列；另补全 11 个闸口广场（R_GATE_*_PLAZA）的演示基线观测，使「写入模拟观测」一次覆盖全部 44 个启用区域（缺任一区域观测都会被判 no_observation 而整机 DEGRADED）。",
     "notice": "派生自 V7.5 研究场景的 MVP 配置副本，verified: false。所有面积、容量与通过耗时仍为估算/合成值，未经现场全站仪复测，不得用于实际疏散应急指挥；冻结证据请以 data/scenarios/hankou-marshland.json 为准。",
     "staff": [
       {
