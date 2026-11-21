@@ -126,7 +126,8 @@ Content-Type: application/json
 ## 已知限制
 
 - `horizon_minutes` 仅回显、不参与求解；`applied.horizon_minutes` 恒为 `null`。当前接口继续使用场景自身的规划时域，没有为了展示效果修改规划器或场景默认值。
-- `GET /api/v1/safety/scenario` 返回的 `simulation_baseline` 仅覆盖 33/44 个启用区域，缺少 11 个 `R_GATE_*_PLAZA`。只注入该基线会使缺少观测的区域被判为不可信，系统进入 `DEGRADED`，因此不会产生方案。
+- `simulation_baseline` 现已覆盖全部 44 个启用区域（提交 `b00bb9d` 在 `data/scenarios/hankou-mvp.json` 的 `overrides` 里补齐了 11 个 `R_GATE_*_PLAZA`）。在此之前只覆盖 33/44，缺观测的区域会被判为不可信，整机进入 `DEGRADED` 且不产生方案。
+- 观测有效期仍是 `config.max_observation_age_seconds = 90`：写入基线后 90 秒内 `/status` 为 `NORMAL`，超时即因 `stale` 转 `DEGRADED`（实测 `stale:134s>90s`）。这是设计属性，不是缺陷；需要稳定画面时应每 ≤60 秒重放一次写入，而不是调大阈值。
 - 当前只接受“闸口失效”和“区域封控”两类情景，不接受通道方向、容量、人数或概率参数的临时覆盖。
 - 需求人数来自当前 `ObservationStore` 的最新观测字段 `estimated_count`，接口不接受自定义需求人数。
 - 每次请求只计算一次，不写入当前运行状态，也不会把临时方案发布为当前方案。
