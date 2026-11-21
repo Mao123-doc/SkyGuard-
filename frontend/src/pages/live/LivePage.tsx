@@ -80,6 +80,34 @@ function LiveDataLegend() {
   </section>;
 }
 
+function DecisionPipeline({ status }: { status: SafetyStatus | null }) {
+  const stages = [
+    ['观测', status ? `${status.observations.length} 条` : '—'],
+    ['风险评估', status?.risk_summary.highest ?? '—'],
+    ['容量规划', status?.candidate_plan?.status ?? status?.plan?.status ?? '—'],
+    ['独立校验', status?.validation ? status.validation.valid ? '通过' : '未通过' : '—'],
+    ['四态决策', status?.state.state ?? '—'],
+  ];
+  return <section className="live-pipeline">
+    <header><div><span>SAFETY DECISION ENGINE</span><h2>安全决策引擎</h2></div><small>GET /api/v1/safety/status</small></header>
+    <ol>{stages.map(([label, value], index) => <li key={label}><i>{index + 1}</i><span>{label}</span><strong>{value}</strong></li>)}</ol>
+    {!status ? <p>暂无安全状态数据</p> : <p>{status.state.headline}</p>}
+  </section>;
+}
+
+function ExitOperations({ status, dashboard }: { status: SafetyStatus | null; dashboard: MvpDashboard | null }) {
+  const plan = status?.plan ?? status?.candidate_plan ?? null;
+  const activeOrders = dashboard?.work_orders.filter(order => !['COMPLETED', 'FAILED', 'REJECTED'].includes(order.status)) ?? [];
+  return <section className="live-exit-ops">
+    <header><div><span>EXIT OPERATIONS</span><h2>疏散任务状态</h2></div><small>安全方案 + MVP 工单</small></header>
+    <div className="live-exit-kpis"><div><span>方案状态</span><strong>{plan?.status ?? '—'}</strong></div><div><span>已分配</span><strong>{plan ? `${plan.evacuated_persons}/${plan.total_persons}` : '—'}</strong></div><div><span>活动工单</span><strong>{dashboard ? activeOrders.length : '—'}</strong></div></div>
+    <h3>出口分配</h3>
+    {plan?.exit_totals.length ? <ul>{plan.exit_totals.map(item => <li key={item.exit_id}><span>{item.exit_id}</span><strong>{item.persons} 人</strong></li>)}</ul> : <p className="live-empty">暂无出口分配数据</p>}
+    <h3>审批中心与工单</h3>
+    {activeOrders.length ? <ul>{activeOrders.slice(0, 5).map(order => <li key={order.id}><span>{order.title}</span><strong>{order.status}{order.stale ? ' · stale' : ''}</strong></li>)}</ul> : <p className="live-empty">暂无活动工单</p>}
+  </section>;
+}
+
 export default function LivePage() {
   const [segment, setSegment] = useState<TimeSegment>(readSegment);
   const [status, setStatus] = useState<SafetyStatus | null>(null);
@@ -102,9 +130,10 @@ export default function LivePage() {
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
   }, [refresh]);
-  const restrictedExits = status?.exits.filter(exit => !exit.usable || exit.effective_status !== 'open').length ?? 0;
-  const latestCount = status?.observations.reduce((sum, observation) => sum + observation.estimated_count, 0) ?? null;
-  const capacity = status?.regions.reduce((sum, region) => sum + region.holding_capacity_persons, 0) ?? null;
+  const liveStatus = dashboard?.safety ?? status;
+  const restrictedExits = liveStatus?.exits.filter(exit => !exit.usable || exit.effective_status !== 'open').length ?? 0;
+  const latestCount = liveStatus?.observations.reduce((sum, observation) => sum + observation.estimated_count, 0) ?? null;
+  const capacity = scenario?.regions.reduce((sum, region) => sum + region.holding_capacity_persons, 0) ?? null;
   return <div className="live-page">
     <TopBar showSegments onSegmentChange={setSegment} />
     <main className="live-content">
@@ -112,17 +141,18 @@ export default function LivePage() {
       {error ? <p className="live-error" role="alert">当前数据读取失败：{error}；请勿将缓存或空值视为实时状态。</p> : null}
       <div className="live-entry-grid">
         {segment === 'entry' ? <>
-          <DutyTable exits={status?.exits ?? []} staff={dashboard?.staff ?? []} loading={!status || !dashboard} />
-          <div className="live-center-stack"><OccupancyGrid regions={status?.regions ?? []} risks={status?.risks ?? []} observations={status?.observations ?? []} loading={!status} /><DroneFeed cameras={dashboard?.cameras ?? []} loading={!dashboard} /></div>
-          <VerdictCard status={status} cameras={dashboard?.cameras ?? []} segment={segment} loading={!status || !dashboard} />
+          {/* TODO: 等后端 staff.instruction 字段；DutyTable 当前明确显示“未知”。 */}
+          <DutyTable exits={liveStatus?.exits ?? []} staff={staff} regions={scenario?.regions ?? liveStatus?.regions ?? []} observations={dashboard?.safety.observations ?? []} loading={!liveStatus || !dashboard} />
+          <div className="live-center-stack"><OccupancyGrid regions={scenario?.regions ?? liveStatus?.regions ?? []} risks={dashboard?.safety.risks ?? []} observations={dashboard?.safety.observations ?? []} loading={!dashboard} /><DroneFeed cameras={dashboard?.cameras ?? []} loading={!dashboard} /></div>
+          <div className="live-right-stack"><VerdictCard status={liveStatus} cameras={dashboard?.cameras ?? []} segment={segment} loading={!liveStatus || !dashboard} /><DecisionPipeline status={liveStatus} /></div>
         </> : segment === 'active' ? <>
-          <OccupancyGrid regions={status?.regions ?? []} risks={status?.risks ?? []} observations={status?.observations ?? []} loading={!status} />
-          <div className="live-center-stack"><OfflineMonitor /><ThresholdCard risks={status?.risks ?? []} incidents={status?.incidents ?? []} /></div>
-          <VerdictCard status={status} cameras={dashboard?.cameras ?? []} segment={segment} loading={!status || !dashboard} />
+          <OccupancyGrid regions={scenario?.regions ?? liveStatus?.regions ?? []} risks={dashboard?.safety.risks ?? []} observations={dashboard?.safety.observations ?? []} loading={!dashboard} />
+          <div className="live-center-stack"><OfflineMonitor /><ThresholdCard risks={liveStatus?.risks ?? []} incidents={liveStatus?.incidents ?? []} /></div>
+          <div className="live-right-stack"><VerdictCard status={liveStatus} cameras={dashboard?.cameras ?? []} segment={segment} loading={!liveStatus || !dashboard} /><DecisionPipeline status={liveStatus} /></div>
         </> : <>
-          <OccupancyGrid regions={status?.regions ?? []} risks={status?.risks ?? []} observations={status?.observations ?? []} loading={!status} />
-          {status ? <section className="live-map-panel"><header><div><span>EVACUATION NETWORK</span><h2>疏散路线图</h2></div><span>{status.state.state}</span></header><NetworkMap map={scenario?.map} status={status} selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} allowRoutes={!error} zoom={mapZoom} setZoom={setMapZoom} center={mapCenter} setCenter={setMapCenter} showBackdrop={false} layers={layers} /><div className="live-map-validation">{status.validation ? `独立校验：${status.validation.valid ? '通过' : '未通过'}` : '独立校验结果：暂无记录'} · 路线显示遵循后端安全状态</div></section> : <section className="live-map-panel live-signal-offline">正在读取网络状态…</section>}
-          <VerdictCard status={status} cameras={dashboard?.cameras ?? []} segment={segment} loading={!status || !dashboard} />
+          <OccupancyGrid regions={scenario?.regions ?? liveStatus?.regions ?? []} risks={dashboard?.safety.risks ?? []} observations={dashboard?.safety.observations ?? []} loading={!dashboard} />
+          {liveStatus ? <section className="live-map-panel"><header><div><span>EVACUATION NETWORK</span><h2>疏散路线图</h2></div><span>{liveStatus.state.state}</span></header><NetworkMap map={scenario?.map} status={liveStatus} selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} allowRoutes={!error} zoom={mapZoom} setZoom={setMapZoom} center={mapCenter} setCenter={setMapCenter} showBackdrop={false} layers={layers} /><div className="live-map-validation">{liveStatus.validation ? `独立校验：${liveStatus.validation.valid ? '通过' : '未通过'}` : '独立校验结果：暂无记录'} · 路线显示遵循后端安全状态</div></section> : <section className="live-map-panel live-signal-offline">正在读取网络状态…</section>}
+          <div className="live-right-stack"><VerdictCard status={liveStatus} cameras={dashboard?.cameras ?? []} segment={segment} loading={!liveStatus || !dashboard} /><ExitOperations status={liveStatus} dashboard={dashboard} /></div>
         </>}
       </div>
       <StaffContract staff={staff} exits={status?.exits ?? []} loading={!status || !dashboard} />

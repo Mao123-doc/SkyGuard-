@@ -186,6 +186,24 @@ export interface AuditEntry {
   summary: string;
   result: 'success' | 'failure' | 'rejected';
   reason?: string;
+  trace_id?: string;
+}
+
+export interface PlanSimulationExclusion {
+  kind: 'exit' | 'region';
+  id: string;
+  reason: 'not_found' | 'disabled_by_simulation' | 'closed_by_simulation';
+}
+
+export interface PlanSimulationResult {
+  simulation_id: string;
+  scenario_name: string;
+  applied: { disabled_exits: string[]; closed_regions: string[]; horizon_minutes: null };
+  state: SafetyStateSnapshot;
+  plan: EvacuationPlan | null;
+  validation: SafetyValidationResult | null;
+  exclusions: PlanSimulationExclusion[];
+  solve_ms: number;
 }
 
 export interface ProviderStatus {
@@ -308,6 +326,12 @@ export const safetyApi = {
   providers: () =>
     client.get<{ providers: ProviderStatus[] }>('/safety/providers').then(response => response.data.providers),
   recompute: () => client.post('/safety/plan/recompute', {}).then(response => response.data),
+  simulatePlan: (body: {
+    disabled_exits?: string[];
+    closed_regions?: string[];
+    horizon_minutes?: number;
+    scenario_name?: string;
+  }) => client.post<PlanSimulationResult>('/safety/plan/simulate', body).then(response => response.data),
   simulate: (observations: Record<string, { count: number; confidence: number }>) =>
     client.post('/safety/observations/simulate', { observations }).then(response => response.data),
   runDemo: (id: string) => client.post<DemoRunResult>(`/safety/demo/${id}/run`, {}).then(response => response.data),

@@ -8,6 +8,7 @@
 .live-summary .is-warn { color: var(--warn); }
 .live-entry-grid { display: grid; grid-template-columns: minmax(330px, .95fr) minmax(500px, 1.55fr) minmax(300px, .8fr); align-items: stretch; gap: 14px; }
 .live-center-stack { display: grid; grid-template-rows: minmax(330px, 1fr) minmax(260px, .8fr); gap: 14px; min-width: 0; }
+.live-right-stack { display: grid; align-content: start; gap: 14px; min-width: 0; }
 .live-error { padding: 9px 12px; border-left: 2px solid var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 6%, var(--panel)); }
 .live-notice { padding: 12px 2px 0; color: var(--faint); font-size: 10px; }
 .live-staff-contract { margin-top: 14px; padding: 14px; border: 1px solid var(--border); background: var(--panel); }
@@ -24,6 +25,24 @@
 .live-staff-grid em { color: var(--faint); font-style: normal; text-align: right; }
 .live-staff-contract footer { margin-top: 10px; }
 .live-empty { color: var(--muted); }
+.live-pipeline,.live-exit-ops { padding: 14px; border: 1px solid var(--border); background: var(--panel); }
+.live-pipeline header,.live-exit-ops header { display: flex; justify-content: space-between; gap: 10px; }
+.live-pipeline header span,.live-exit-ops header span { color: var(--accent); font: 9px var(--font-mono); }
+.live-pipeline header small,.live-exit-ops header small { color: var(--muted); font-size: 9px; }
+.live-pipeline h2,.live-exit-ops h2 { margin: 2px 0 10px; font-size: 14px; }
+.live-pipeline ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; margin: 0; padding: 0; list-style: none; }
+.live-pipeline li { display: grid; gap: 4px; min-width: 0; padding: 7px; border: 1px solid var(--border); background: var(--panel-2); }
+.live-pipeline li i { display: grid; width: 18px; height: 18px; place-items: center; border: 1px solid var(--accent); border-radius: 50%; color: var(--accent); font-size: 9px; font-style: normal; }
+.live-pipeline li span,.live-pipeline p { color: var(--muted); font-size: 9px; }
+.live-pipeline li strong { overflow-wrap: anywhere; font-size: 10px; }
+.live-pipeline p { margin: 9px 0 0; }
+.live-exit-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.live-exit-kpis div { display: grid; gap: 3px; padding: 8px; border: 1px solid var(--border); background: var(--panel-2); }
+.live-exit-kpis span { color: var(--muted); font-size: 9px; }
+.live-exit-ops h3 { margin: 12px 0 6px; font-size: 11px; }
+.live-exit-ops ul { display: grid; gap: 5px; max-height: 180px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.live-exit-ops li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+.live-exit-ops li strong { color: var(--text); text-align: right; }
 .live-data-legend { margin-top: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
 .live-data-legend header span { color: var(--accent); font: 9px var(--font-mono); }
 .live-data-legend h2 { margin: 2px 0 8px; font-size: 13px; }
@@ -45,4 +64,4 @@
 .map-region[data-density-level="3"] { fill: color-mix(in srgb, var(--dens-3) 62%, transparent); }
 .map-region[data-density-level="4"] { fill: color-mix(in srgb, var(--dens-4) 72%, transparent); }
 @media (max-width: 1160px) { .live-entry-grid { grid-template-columns: minmax(280px, .9fr) minmax(360px, 1.1fr); } .live-entry-grid > :last-child { grid-column: 1 / -1; } .live-staff-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .live-content { padding: 12px; } .live-summary { gap: 7px; } .live-summary > div { min-height: 68px; padding: 9px; } .live-summary strong { font-size: 18px; } .live-entry-grid { grid-template-columns: minmax(0, 1fr); } .live-center-stack { grid-template-rows: auto auto; } .live-entry-grid > :last-child { grid-column: auto; } .live-staff-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .live-data-legend > div { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .live-content { padding: 12px; } .live-summary { gap: 7px; } .live-summary > div { min-height: 68px; padding: 9px; } .live-summary strong { font-size: 18px; } .live-entry-grid { grid-template-columns: minmax(0, 1fr); } .live-center-stack { grid-template-rows: auto auto; } .live-entry-grid > :last-child { grid-column: auto; } .live-staff-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .live-data-legend > div { grid-template-columns: 1fr; } .live-pipeline ol { grid-template-columns: 1fr; } }

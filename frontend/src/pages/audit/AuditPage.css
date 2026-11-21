@@ -9,7 +9,7 @@
 .audit-title button:disabled { opacity: .5; }
 .audit-filters { display: flex; align-items: end; gap: 12px; padding: 12px; border: 1px solid var(--border); background: var(--panel); }
 .audit-filters label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }
-.audit-filters input,.audit-filters select { min-width: 210px; padding: 7px 9px; border: 1px solid var(--border-strong); color: var(--text); background: var(--panel-2); }
+.audit-filters input,.audit-filters select { min-width: 150px; max-width: 240px; padding: 7px 9px; border: 1px solid var(--border-strong); color: var(--text); background: var(--panel-2); }
 .audit-filters > span { margin-left: auto; color: var(--faint); font-size: 10px; }
 .audit-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 12px 0; }
 .audit-stats div { display: grid; gap: 4px; padding: 11px; border: 1px solid var(--border); background: var(--panel); }
@@ -17,11 +17,17 @@
 .audit-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, .7fr); gap: 12px; }
 .audit-table-wrap,.audit-drawer { min-width: 0; border: 1px solid var(--border); background: var(--panel); }
 .audit-table { width: 100%; border-collapse: collapse; font-size: 10px; }.audit-table th { padding: 10px 8px; color: var(--muted); text-align: left; background: var(--panel-2); }.audit-table td { padding: 10px 8px; border-top: 1px solid var(--border); color: var(--text); cursor: pointer; }.audit-table tr:hover td { background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }.audit-table td small { display: block; color: var(--faint); }.audit-table code,.audit-drawer code { color: var(--info); font: 9px var(--font-mono); }.audit-result { color: var(--ok); }.audit-table tr[data-result="failure"] .audit-result { color: var(--warn); }.audit-table tr[data-result="rejected"] .audit-result { color: var(--bad); }.audit-empty { padding: 30px !important; color: var(--muted) !important; text-align: center; }
+.audit-table tr[aria-selected="true"] td { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
 .audit-drawer { padding: 14px; }.audit-drawer header { display: flex; justify-content: space-between; }.audit-drawer h2 { margin: 3px 0 15px; font-size: 16px; }.audit-drawer header button { border: 0; color: var(--muted); background: transparent; font-size: 22px; cursor: pointer; }.audit-drawer dl { margin: 0; }.audit-drawer dt { margin-top: 12px; color: var(--muted); font-size: 9px; }.audit-drawer dd { margin: 3px 0 0; color: var(--text); font-size: 11px; }.audit-review { margin-top: 20px; border-color: var(--border-strong); color: var(--muted); }.audit-drawer-empty { display: grid; min-height: 260px; place-content: center; color: var(--muted); text-align: center; }.audit-drawer-empty small { color: var(--faint); }.audit-notice { padding-top: 12px; }
 .audit-detail-checks { margin-top: 18px; padding: 12px; border: 1px solid var(--border); background: var(--panel-2); }
 .audit-detail-checks h3 { margin: 0 0 8px; font-size: 12px; }
 .audit-detail-checks p { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0; color: var(--muted); font-size: 10px; }
 .audit-detail-checks b { color: var(--ok); font-weight: 500; }
 .audit-detail-checks small { color: var(--faint); font-size: 9px; }
+.audit-trace-stages,.audit-json { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.audit-trace-stages h3,.audit-json h3 { margin: 0 0 8px; font-size: 11px; }
+.audit-trace-stages p { display: flex; justify-content: space-between; gap: 8px; margin: 5px 0; color: var(--muted); font-size: 9px; }
+.audit-trace-stages b { color: var(--text); font-weight: 500; text-align: right; }
+.audit-json pre { max-height: 320px; margin: 0; padding: 10px; overflow: auto; border: 1px solid var(--border); color: var(--muted); background: var(--bg); font: 9px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 900px) { .audit-filters { flex-wrap: wrap; }.audit-filters > span { margin-left: 0; }.audit-stats { grid-template-columns: repeat(3, 1fr); }.audit-layout { grid-template-columns: 1fr; }.audit-drawer { min-height: 220px; } }
 @media (max-width: 600px) { .audit-content { padding: 14px 10px; }.audit-title { display: block; }.audit-title button { margin-top: 12px; }.audit-filters input,.audit-filters select { min-width: 0; width: 100%; }.audit-table-wrap { overflow-x: auto; }.audit-table { min-width: 720px; } }

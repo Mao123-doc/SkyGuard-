@@ -24,6 +24,7 @@
 .replay-left, .replay-reasoning { display: grid; gap: 14px; }
 .replay-snapshot header, .replay-kpis, .replay-evidence-grid { margin-top: 14px; }
 .replay-snapshot { margin-top: 14px; }
+.replay-snapshot .cc-map { display: block; width: 100%; min-height: 440px; height: min(62vh, 660px); margin-top: 12px; }
 .replay-snapshot header, .replay-evidence header { display: flex; justify-content: space-between; gap: 12px; }
 .replay-evidence { padding: 18px; border: 1px solid var(--border); background: var(--panel); }
 .replay-evidence header h2 { margin: 0; }
@@ -37,6 +38,7 @@
 .replay-evidence-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .replay-chain { display: grid; gap: 10px; margin: 14px 0 0; padding-left: 22px; }
 .replay-chain li { display: grid; gap: 3px; }
+.replay-chain li small { overflow-wrap: anywhere; }
 .replay-chain-meta { display: grid; gap: 4px; margin-top: 12px; color: var(--muted); font-size: 10px; }
 .replay-chain li[data-status='failed'] { color: var(--bad); }
 .replay-chain li[data-status='warning'] { color: var(--warn); }
