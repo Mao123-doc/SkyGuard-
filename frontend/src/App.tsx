@@ -14,7 +14,7 @@ export default function App() {
     <BrowserRouter>
       <Suspense fallback={<div className="app-loading">正在加载 SkyGuard…</div>}>
         <Routes>
-          <Route path="/" element={<Navigate to="/legacy" replace />} />
+          <Route path="/" element={<Navigate to="/plan" replace />} />
           <Route path="/plan" element={<PlanPage />} />
           <Route path="/live" element={<LivePage />} />
           <Route path="/replay" element={<ReplayPage />} />
@@ -22,7 +22,7 @@ export default function App() {
           <Route path="/legacy" element={<CommandCenterPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/staff" element={<StaffPage />} />
-          <Route path="*" element={<Navigate to="/legacy" replace />} />
+          <Route path="*" element={<Navigate to="/plan" replace />} />
         </Routes>
       </Suspense>
     </BrowserRouter>
