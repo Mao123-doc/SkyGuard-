@@ -23,6 +23,7 @@ import { IncidentTransitionError } from '../../services/safety/incidents';
 import { buildCongestionPreview, buildMpcPreview } from '../../services/v70/research';
 import { shadowConfig, shadowComparisonsOf } from '../../services/safety/planning/v7-adapter';
 import { securityConfig } from '../../config/security';
+import { SafetyDecisionService } from '../../services/safety/decision-service';
 
 export interface SafetyRouterOptions {
   /** 测试用：跳过 JWT（默认 false）。 */
@@ -111,6 +112,12 @@ const IncidentBody = z.object({
 const ParseBody = z.object({ text: z.string().min(1) });
 const ResolveBody = z.object({ note: z.string().optional(), recompute: z.boolean().optional() });
 const RecomputeBody = z.object({ trigger: z.string().optional() });
+const PlanSimulateBody = z.object({
+  disabled_exits: z.array(z.string().min(1)).default([]),
+  closed_regions: z.array(z.string().min(1)).default([]),
+  horizon_minutes: z.number().int().positive().optional(),
+  scenario_name: z.string().min(1).max(200).optional(),
+});
 
 export function createSafetyRouter(options: SafetyRouterOptions = {}): Router {
   const router = Router();
@@ -526,6 +533,74 @@ export function createSafetyRouter(options: SafetyRouterOptions = {}): Router {
     }
     const validation = getSafetyService().validateCandidate(parsed.data, actorOf(req));
     res.json({ validation, publishable: validation.valid });
+  });
+
+  router.post('/plan/simulate', (req, res) => {
+    const parsed = PlanSimulateBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      fail(res, 400, 'INVALID_INPUT', '请求体不合法', parsed.error.issues);
+      return;
+    }
+
+    const started = Date.now();
+    try {
+      const base = getSafetyService();
+      const patched = structuredClone(base.getScenario());
+      const exclusions: Array<{
+        kind: 'exit' | 'region';
+        id: string;
+        reason: 'not_found' | 'disabled_by_simulation' | 'closed_by_simulation';
+      }> = [];
+      const updatedAt = new Date().toISOString();
+
+      for (const id of parsed.data.disabled_exits) {
+        const exit = patched.exits.find(item => item.id === id);
+        if (!exit) {
+          exclusions.push({ kind: 'exit', id, reason: 'not_found' });
+          continue;
+        }
+        exit.status = 'closed';
+        exit.status_source = 'simulation';
+        exit.updated_at = updatedAt;
+        exclusions.push({ kind: 'exit', id, reason: 'disabled_by_simulation' });
+      }
+
+      for (const id of parsed.data.closed_regions) {
+        const region = patched.regions.find(item => item.id === id);
+        if (!region) {
+          exclusions.push({ kind: 'region', id, reason: 'not_found' });
+          continue;
+        }
+        region.enabled = false;
+        exclusions.push({ kind: 'region', id, reason: 'closed_by_simulation' });
+      }
+
+      const temp = new SafetyDecisionService({
+        scenario: patched,
+        observationStore: base.getObservationStore(),
+        incidentStore: base.getIncidentStore(),
+        now: () => new Date(),
+      });
+      const result = temp.recompute(actorOf(req), 'plan:simulate');
+      const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 15);
+
+      res.json({
+        simulation_id: `sim-${stamp}-${Math.random().toString(16).slice(2, 6)}`,
+        scenario_name: parsed.data.scenario_name ?? '未命名情景',
+        applied: {
+          disabled_exits: parsed.data.disabled_exits,
+          closed_regions: parsed.data.closed_regions,
+          horizon_minutes: null,
+        },
+        state: result.snapshot,
+        plan: result.plan ?? null,
+        validation: result.validation ?? null,
+        exclusions,
+        solve_ms: Date.now() - started,
+      });
+    } catch (error) {
+      fail(res, 500, 'SIMULATION_FAILED', '情景推演失败', (error as Error).message);
+    }
   });
 
   // ------------------------------------------------------------------ 演示 / 运维
